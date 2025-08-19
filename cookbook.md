@@ -224,7 +224,7 @@ The redesigned AI Task Workflow provides comprehensive real-time tracking of AI 
 *   [`WorkflowManager`](fr_ai_chart.cfm:1748) enhanced with AI agent integration  
 *   [`updateAiTodoList()`](fr_ai_chart.cfm:1886) for rendering the enhanced UI
 *   [`GeminiAPI`](fr_ai_chart.cfm:2139) wrapper for API tracking
-*   [`enhanced-ai-workflow-styles.css`](enhanced-ai-workflow-styles.css) for modern UI styling
+*   [`ai_chart_workflow.css`](ai_chart_workflow.css) for modern UI styling
 
 ### 3.12. ERP-Specific Logic
 
