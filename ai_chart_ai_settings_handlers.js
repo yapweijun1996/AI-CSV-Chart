@@ -9,16 +9,19 @@ export function openAiSettings() {
   const modal = $('#aiSettingsModal');
   const apiKeyInput = $('#apiKeyInput');
   const modelSelect = $('#modelSelect');
+  const languageSelect = $('#languageSelect');
   const testResult = $('#testResult');
   
-  // Load saved API key and model
+  // Load saved API key, model, and language
   const savedKey = localStorage.getItem('gemini_api_key');
   const savedModel = localStorage.getItem('gemini_model') || 'gemini-1.5-flash';
+  const savedLanguage = localStorage.getItem('ai_language') || 'English';
   
   if (savedKey) {
     apiKeyInput.value = savedKey;
   }
   modelSelect.value = savedModel;
+  languageSelect.value = savedLanguage;
   
   // Hide test result
   testResult.style.display = 'none';
@@ -87,17 +90,22 @@ export function initializeAiSettingsHandlers(dependencies) {
     $('#saveApiKeyBtn').onclick = () => {
         const apiKey = $('#apiKeyInput').value.trim();
         const model = $('#modelSelect').value;
+        const language = $('#languageSelect').value;
 
         localStorage.setItem('gemini_api_key', apiKey);
         localStorage.setItem('gemini_model', model);
+        localStorage.setItem('ai_language', language);
         showToast('AI settings saved successfully!', 'success');
+        $('#aiSettingsModal').classList.remove('open');
     };
 
     $('#clearApiKeyBtn').onclick = () => {
         localStorage.removeItem('gemini_api_key');
         localStorage.removeItem('gemini_model');
+        localStorage.removeItem('ai_language');
         $('#apiKeyInput').value = '';
         $('#modelSelect').value = 'gemini-1.5-flash';
+        $('#languageSelect').value = 'English';
         $('#testResult').style.display = 'none';
         showToast('AI settings cleared.', 'success');
     };

@@ -25,11 +25,14 @@ export async function fetchWithRetry(apiKey, model, prompt, showToast) {
   while (attempt <= MAX_RETRIES) {
     attempt++;
     try {
+      const language = localStorage.getItem('ai_language') || 'English';
+      const finalPrompt = `${prompt}\n\nPlease respond in ${language}.`;
+
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
+          contents: [{ parts: [{ text: finalPrompt }] }]
         })
       });
 
