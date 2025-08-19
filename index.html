@@ -3624,6 +3624,9 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
             grid.style.opacity = '1';
             applyMasonryLayout();
         });
+        
+        // After re-rendering, regenerate the explanation
+        generateExplanation(newAgg, job, card);
     }
 
     // Initial render
