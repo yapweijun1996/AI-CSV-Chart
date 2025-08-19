@@ -2,6 +2,15 @@
 
 This is a powerful, client-side CSV analysis tool that allows you to upload a CSV file and automatically generate aggregates, charts, and a data table. It features both automatic and manual modes for data analysis, a variety of chart types, and a history system to save and load your analysis sessions. The application is designed with a modular architecture and leverages AI to provide intelligent insights and streamline the data analysis process.
 
+## Demo
+
+https://yapweijun1996.github.io/AI-CSV-Chart/
+
+## Preview
+
+<img width="1440" height="770" alt="og_img" src="https://github.com/user-attachments/assets/3c379a6d-1241-4f77-886a-f8596b969927" />
+
+
 ## Core Features
 
 -   **Advanced CSV Parsing**: Upload CSV files with automatic delimiter detection. The application uses a web worker for parsing to ensure the UI remains responsive, even with large files. This allows for a smooth user experience when working with large datasets.
