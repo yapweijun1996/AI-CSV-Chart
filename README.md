@@ -12,51 +12,90 @@ This is a powerful, client-side CSV analysis tool that allows you to upload a CS
 -   **Comprehensive Data Table**: View the raw data in a searchable and sortable table with pagination and the ability to download filtered data.
 -   **Persistent History**: Save your analysis sessions and load them later. The history is stored in your browser's **IndexedDB**, ensuring that your work is preserved across sessions.
 
-## Technical Deep Dive for Developers
+## Developer Guide — Technical Deep Dive
 
-This section provides a more detailed look at the project's architecture, data flow, and key technical decisions, intended for developers who want to understand, contribute to, or extend the application.
+This section explains the project architecture, data flow, and practical implementation details for developers (junior → senior). It includes quick-start tips, file responsibilities, extension points, and debugging/testing suggestions.
 
-### Core Architectural Principles
+### Quick Start (dev)
+- Open the project in your editor and serve a static host (for local file access use a simple server):
+  - Example: python -m http.server 8000 (from project root).
+- Open the app in a modern browser (Chrome/Edge/Safari). Use DevTools for logging and performance profiling.
+- Key files to inspect first:
+  - [`index.html`](index.html:1) — main UI skeleton and modal markup.
+  - [`ai_chart_api.js`](ai_chart_api.js:1) — AI request logic and retry/backoff.
+  - [`ai_chart_ai_settings_handlers.js`](ai_chart_ai_settings_handlers.js:1) — settings UI and localStorage integration.
 
--   **Client-Side Processing**: All data processing, including CSV parsing and analysis, is done in the browser. This enhances data privacy and reduces server-side load.
--   **Modularity (ESM)**: The codebase is organized into JavaScript modules (`.js` files with `import`/`export`) to promote separation of concerns, making the code easier to maintain and debug.
--   **Asynchronous Operations**: The application makes extensive use of `async/await` for non-blocking operations like file reading, API calls, and IndexedDB transactions, ensuring a responsive UI.
--   **Web Workers**: CSV parsing is offloaded to a web worker (`csv_worker.js`) to prevent the main thread from freezing, especially with large files.
+### Core Architectural Principles (concise)
+- Client-side processing: parsing, profiling, aggregation and rendering all run in-browser for privacy and simplicity.
+- Modular ESM code: functionality is split into focused modules to keep surface area small and testable.
+- Async-first design: file I/O, worker comms, IndexedDB, and network calls use async/await.
+- Web worker for parsing: CSV parsing occurs in a worker to avoid UI jank.
 
-### Data Flow and State Management
+### High-Level Data Flow (steps + code pointers)
+1. File upload → parsing
+   - UI: [`index.html`](index.html:1) file input triggers handler in `main.js`.
+   - Worker: `csv_worker.js` (uses PapaParse) streams rows back to main thread.
+   - Storage: parsed rows are written to IndexedDB via [`ai_chart_store.js`](ai_chart_store.js:1).
 
-The application follows a clear data flow from file upload to visualization:
+2. Profiling → plan generation
+   - Profiling: [`ai_chart_profile.js`](ai_chart_profile.js:1) inspects columns (functions: `inferType`, `inferRole`).
+   - AI call: [`ai_chart_api.js`](ai_chart_api.js:1) sends a prompt containing the profile; receives an "analysis plan" JSON.
 
-1.  **File Upload & Parsing**:
-    -   The user selects a CSV file via the `<input type="file">` element.
-    -   `main.js` listens for the `change` event and sends the file to `csv_worker.js` for parsing with **PapaParse**.
-    -   The worker streams the parsed data back to the main thread, where it is stored in **IndexedDB** for persistence.
+3. Task execution → charts + explanations
+   - Task manager: [`ai_chart_task_manager.js`](ai_chart_task_manager.js:1) acts as a lightweight state machine to run the plan sequentially.
+   - Aggregations: core aggregation helpers live near the task manager (look for `aggregate`/`groupBy` helpers).
+   - Visualization: charts rendered with Chart.js; explanations rendered using Marked.js.
 
-2.  **Data Profiling**:
-    -   Once parsing is complete, `ai_chart_profile.js` is invoked.
-    -   The `profileData` function iterates through the columns, using `inferType` and `inferRole` to determine the data type (e.g., `number`, `date`) and business role (e.g., `metric`, `dimension`).
-    -   This profile is crucial for the AI to understand the data's structure.
+4. UI / persistence
+   - UI handlers: [`ai_chart_ui_handlers.js`](ai_chart_ui_handlers.js:1) update DOM, create cards, and handle user interactions.
+   - Session persistence: [`ai_chart_store.js`](ai_chart_store.js:1) saves sessions and chunked CSV to IndexedDB.
 
-3.  **AI-Powered Analysis (Auto Mode)**:
-    -   The data profile is sent to the Gemini API via `ai_chart_api.js`.
-    -   The AI returns an "analysis plan," which is a JSON object containing a list of aggregations and chart specifications.
-    -   The `AITaskManager` in `ai_chart_task_manager.js` takes this plan and executes each task sequentially.
-    -   For each chart, it sends the aggregated data back to the AI to generate a natural language explanation.
+### File Responsibility Reference
+- [`index.html`](index.html:1) — UI layout, modals, and static assets.
+- [`main.js`](main.js:1) — app bootstrap, wiring events to modules.
+- [`csv_worker.js`](csv_worker.js:1) — background CSV parsing (PapaParse).
+- [`ai_chart_store.js`](ai_chart_store.js:1) — IndexedDB abstraction (save/load sessions).
+- [`ai_chart_profile.js`](ai_chart_profile.js:1) — data profiling heuristics.
+- [`ai_chart_erp_logic.js`](ai_chart_erp_logic.js:1) — ERP-specific heuristics (optional).
+- [`ai_chart_api.js`](ai_chart_api.js:1) — Gemini API prompt construction, `fetchWithRetry`.
+- [`ai_chart_task_manager.js`](ai_chart_task_manager.js:1) — orchestrates plan execution.
+- [`ai_chart_ui_handlers.js`](ai_chart_ui_handlers.js:1) — DOM updates, chart rendering.
+- [`ai_chart_ai_settings_handlers.js`](ai_chart_ai_settings_handlers.js:1) — settings modal, localStorage keys: `gemini_api_key`, `gemini_model`, `ai_language`.
 
-4.  **Rendering**:
-    -   Aggregates and charts are rendered dynamically using **Chart.js**.
-    -   The raw data is displayed in a paginated table with search and sort functionality.
-    -   AI-generated explanations are rendered as Markdown using **Marked.js**.
+### Extension Points & Typical Changes
+- Adding models or instruction templates:
+  - Edit [`ai_chart_api.js`](ai_chart_api.js:1): centralize prompt templates and language injection.
+- Custom aggregation logic:
+  - Add helpers alongside `ai_chart_task_manager.js` and update the plan-to-aggregation mapping.
+- New chart types:
+  - Update `ai_chart_ui_handlers.js` rendering paths and Chart.js config templates.
 
-### Key Modules and Their Responsibilities
+### Debugging & Performance Tips
+- CPU-heavy work? Profile and move to worker. Use Chrome's Performance tab to find main-thread spikes.
+- Inspect network calls to Gemini in DevTools — watch for rate-limit responses; `fetchWithRetry` handles retries but log responses for debugging.
+- IndexedDB errors: wrap calls with try/catch and enable verbose logging inside [`ai_chart_store.js`](ai_chart_store.js:1).
 
--   **`main.js`**: The entry point of the application. It initializes event listeners for UI elements and orchestrates the overall workflow.
--   **`ai_chart_store.js`**: A robust data layer that abstracts IndexedDB operations. It handles saving/loading session history and managing chunked CSV data, providing a simple promise-based API for the rest of the application.
--   **`ai_chart_api.js`**: Manages all communication with the Gemini API. It includes a `fetchWithRetry` function with exponential backoff, which is a critical feature for handling API rate limits gracefully.
--   **`ai_chart_profile.js`**: Contains the data profiling logic. The `inferType` and `inferRole` functions use a combination of regex and heuristics to analyze column data. It also includes specialized logic for ERP data patterns in `ai_chart_erp_logic.js`.
--   **`ai_chart_task_manager.js`**: A state machine for the AI analysis workflow. It tracks the progress of each task (e.g., "generating plan," "creating chart") and updates the UI accordingly, providing real-time feedback to the user.
--   **`ai_chart_ui_handlers.js`**: Manages UI interactions, such as rendering charts, updating tables, and handling user inputs.
--   **`ai_chart_ai_settings_handlers.js`**: Encapsulates the logic for the AI settings modal, including saving the API key, model, and language preference to `localStorage`.
+### Testing & Validation
+- Manual tests:
+  - Use small and large CSV samples to validate streaming parsing and UI responsiveness.
+  - Create edge-case CSVs (missing headers, mixed types) to verify `inferType`/`inferRole`.
+- Unit / smoke tests:
+  - Modules are plain JS — extract pure functions (profiling, aggregation) and test with Jest or similar.
+- Integration tests:
+  - Run the app in a headless browser (Puppeteer) to exercise the UI flows end-to-end.
+
+### Security & Privacy Notes
+- All processing is client-side; the only external dependency is the Gemini API request (requires a user-provided API key).
+- Do not commit API keys. Keys are stored in `localStorage` by design — document this to users and teams.
+
+### Recommended Onboarding Steps for New Contributors
+1. Run the app locally and open DevTools.
+2. Trace a full flow: upload CSV → profile → generate cards. Observe logs.
+3. Inspect the prompt sent to Gemini in [`ai_chart_api.js`](ai_chart_api.js:1) to understand how the AI plan is requested.
+4. Modify a small module (e.g., add a logging statement in [`ai_chart_profile.js`](ai_chart_profile.js:1)) and test.
+
+### Summary
+This project is intentionally modular and approachable. For quick contributions: focus on small, well-scoped changes (profiling heuristics, chart templates, or small UI improvements). For larger features, update the plan generation or task execution layers, and add unit tests for pure logic.
 
 ## How to Use
 
