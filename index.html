@@ -5616,8 +5616,16 @@ document.addEventListener('DOMContentLoaded', () => {
           console.warn('Could not reconstruct aggregation data:', error);
         }
 
-        // Get AI explanation if stored
-        const explanation = card.dataset.explanationMarkdown || '';
+        // Get AI explanation if stored (check both dataset and rendered content)
+        const explanationEl = card.querySelector('.ai-explanation-content');
+        const explanation = card.dataset.explanationMarkdown || (explanationEl ? explanationEl.innerHTML : '') || '';
+        
+        console.log(`🔍 Explanation check for card "${title}":`, {
+          hasDatasetMarkdown: !!card.dataset.explanationMarkdown,
+          hasContentElement: !!explanationEl,
+          contentLength: explanationEl ? explanationEl.innerHTML.length : 0,
+          finalExplanation: !!explanation && explanation.trim().length > 0
+        });
 
         const chartContext = {
           title: title,
@@ -5628,7 +5636,7 @@ document.addEventListener('DOMContentLoaded', () => {
           chartCount: chartElements.length,
           hasData: tableData.length > 0,
           // Rich aggregation data
-          aggregation: aggregationData ? {
+          aggregation: (aggregationData && aggregationData.rows) ? {
             groupBy: card.dataset.groupBy,
             metric: card.dataset.metric,
             aggregation: card.dataset.agg,
@@ -5688,7 +5696,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     if (chartsCount) {
-      chartsCount.textContent = `Charts: ${context.charts.length}`;
+      const chartsArray = context.charts || [];
+      chartsCount.textContent = `Charts: ${chartsArray.length}`;
     }
     
     if (lastUpdated) {
@@ -5696,10 +5705,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Update detailed breakdown sections
-    updateChartBreakdown(context.charts);
-    updateExplanationBreakdown(context.charts);
-    updateSummaryBreakdown(context.summary);
-    updateDatasetBreakdown(context.dataset);
+    updateChartBreakdown(context.charts || []);
+    updateExplanationBreakdown(context.charts || []);
+    updateSummaryBreakdown(context.summary || null);
+    updateDatasetBreakdown(context.dataset || null);
     
     chatState.lastContextRefresh = context.timestamp;
   }
@@ -5709,7 +5718,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const breakdown = document.getElementById('chart-breakdown-list');
     if (!breakdown) return;
 
-    if (charts.length === 0) {
+    if (!charts || charts.length === 0) {
       breakdown.innerHTML = '<div class="context-item-empty">No charts available</div>';
       return;
     }
@@ -5741,6 +5750,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateExplanationBreakdown(charts) {
     const breakdown = document.getElementById('explanation-breakdown');
     if (!breakdown) return;
+
+    if (!charts) {
+      breakdown.innerHTML = '<div class="context-item-empty">No AI explanations available</div>';
+      return;
+    }
 
     const explanations = charts.filter(chart => chart.aiExplanation && chart.aiExplanation.trim());
     
@@ -5804,10 +5818,10 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="context-item">
         <div class="context-item-title">Dataset Overview</div>
         <div class="context-item-details">
-          <span class="context-badge">${dataset.rowCount} rows</span>
-          <span class="context-badge">${dataset.columns.length} columns</span>
+          <span class="context-badge">${dataset.rowCount || 0} rows</span>
+          <span class="context-badge">${(dataset.columns || []).length} columns</span>
         </div>
-        <div class="context-item-meta">Columns: ${dataset.columns.join(', ')}</div>
+        <div class="context-item-meta">Columns: ${(dataset.columns || []).join(', ')}</div>
       </div>
     `;
   }
@@ -5910,21 +5924,67 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Prepare context for AI
       const contextPrompt = `
-Context Information:
-- Dataset: ${context.dataset ? `${context.dataset.rowCount} rows, ${context.dataset.columns.length} columns` : 'No data loaded'}
-- Charts: ${context.charts.length} chart groups
-- AI Summary: ${context.summary ? 'Available' : 'Not generated'}
+System: You are a helpful data analysis assistant. Provide insights about charts, data patterns, and analytics. Be conversational and helpful.
 
-Current Charts:
-${context.charts.map(chart => `- ${chart.title}: ${chart.charts.length} visualization(s)`).join('\n')}
-
+=== DATASET OVERVIEW ===
 ${context.dataset ? `
-Dataset Columns: ${context.dataset.columns.join(', ')}
+- Total Records: ${context.dataset.rowCount}
+- Columns (${context.dataset.columns.length}): ${context.dataset.columns.join(', ')}
+- Sample Data Preview:
+${context.dataset.sampleData ? context.dataset.sampleData.slice(0, 3).map(row => '  ' + Object.entries(row).map(([k,v]) => `${k}: ${v}`).join(', ')).join('\n') : 'No sample data available'}
+` : 'No dataset loaded'}
+
+=== CHART ANALYSIS (${(context.charts || []).length} charts) ===
+${(context.charts || []).map(chart => {
+  let chartInfo = `\n📊 ${chart.title}`;
+  if (chart.subtitle) chartInfo += `\n   Subtitle: ${chart.subtitle}`;
+  chartInfo += `\n   Type: ${(chart.chartTypes || []).join(', ')}`;
+  
+  // Add aggregation details if available
+  if (chart.aggregation) {
+    chartInfo += `\n   Analysis: ${chart.aggregation.aggregation}(${chart.aggregation.metric}) grouped by ${chart.aggregation.groupBy}`;
+    chartInfo += `\n   Data Points: ${chart.aggregation.rowCount} rows`;
+    
+    // Include sample aggregated data
+    if (chart.aggregation.sampleRows && chart.aggregation.headers) {
+      chartInfo += `\n   Top Results:`;
+      chart.aggregation.sampleRows.slice(0, 5).forEach(row => {
+        chartInfo += `\n     • ${row[0]}: ${row[1]}`;
+      });
+    }
+  }
+  
+  // Add table data if available
+  if (chart.sampleData && chart.sampleData.length > 0) {
+    chartInfo += `\n   Table Data (${chart.sampleData.length} rows shown):`;
+    if (chart.tableHeaders && chart.tableHeaders.length > 0) {
+      chartInfo += `\n     Headers: ${chart.tableHeaders.join(' | ')}`;
+      chart.sampleData.slice(0, 3).forEach(row => {
+        chartInfo += `\n     ${row.join(' | ')}`;
+      });
+    }
+  }
+  
+  // Add AI explanation if available
+  if (chart.aiExplanation && chart.aiExplanation.trim()) {
+    const cleanExplanation = chart.aiExplanation.replace(/<[^>]*>/g, '').trim();
+    if (cleanExplanation) {
+      chartInfo += `\n   AI Insight: ${cleanExplanation.substring(0, 200)}${cleanExplanation.length > 200 ? '...' : ''}`;
+    }
+  }
+  
+  return chartInfo;
+}).join('\n')}
+
+${context.summary ? `
+=== AI SUMMARY ===
+${context.summary.substring(0, 500)}${context.summary.length > 500 ? '...' : ''}
 ` : ''}
 
-User Question: ${userMessage}
+=== USER QUESTION ===
+${userMessage}
 
-Please provide a helpful response about the data analysis, charts, or patterns. Be conversational and insightful.`;
+Please provide a helpful, insightful response based on the above data analysis context. Use specific numbers and insights from the charts when possible.`;
 
       // Get API key from settings (using same pattern as existing AI features)
       const apiKey = localStorage.getItem('gemini_api_key');

@@ -1590,6 +1590,8 @@ mark {
     display: flex;
     flex-direction: column;
     gap: var(--s-4);
+    height: 100px;
+    overflow: auto;
   }
 
   .context-section {
