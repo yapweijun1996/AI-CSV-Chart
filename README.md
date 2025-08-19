@@ -12,25 +12,51 @@ This is a powerful, client-side CSV analysis tool that allows you to upload a CS
 -   **Comprehensive Data Table**: View the raw data in a searchable and sortable table with pagination and the ability to download filtered data.
 -   **Persistent History**: Save your analysis sessions and load them later. The history is stored in your browser's **IndexedDB**, ensuring that your work is preserved across sessions.
 
-## Architecture and Key Concepts
+## Technical Deep Dive for Developers
 
-The application is built with a modular architecture that promotes separation of concerns and maintainability. The core logic is organized into several key modules:
+This section provides a more detailed look at the project's architecture, data flow, and key technical decisions, intended for developers who want to understand, contribute to, or extend the application.
 
--   **`ai_chart_store.js`**: Manages client-side storage using IndexedDB for session history and chunked CSV data, ensuring data persistence.
--   **`ai_chart_api.js`**: Handles communication with the Gemini API, featuring a `fetchWithRetry` function with exponential backoff to manage rate limits.
--   **`ai_chart_profile.js`**: Contains the logic for data profiling, including `inferType` and `inferRole` functions that automatically analyze and categorize columns.
--   **`ai_chart_task_manager.js`**: Manages the state of the AI analysis workflow, tracking tasks from initialization to completion and updating the UI accordingly.
--   **`ai_chart_erp_logic.js`**: Provides specialized logic for identifying and analyzing ERP data patterns, enabling more accurate and relevant insights for business data.
--   **`ai_chart_ai_settings_handlers.js`**: Manages the AI settings modal, allowing users to configure their API key, select a model, and choose a response language.
+### Core Architectural Principles
 
-## AI-Powered Workflow
+-   **Client-Side Processing**: All data processing, including CSV parsing and analysis, is done in the browser. This enhances data privacy and reduces server-side load.
+-   **Modularity (ESM)**: The codebase is organized into JavaScript modules (`.js` files with `import`/`export`) to promote separation of concerns, making the code easier to maintain and debug.
+-   **Asynchronous Operations**: The application makes extensive use of `async/await` for non-blocking operations like file reading, API calls, and IndexedDB transactions, ensuring a responsive UI.
+-   **Web Workers**: CSV parsing is offloaded to a web worker (`csv_worker.js`) to prevent the main thread from freezing, especially with large files.
 
-The application's AI workflow is designed to automate the data analysis process and provide users with actionable insights. Here's how it works:
+### Data Flow and State Management
 
-1.  **Analysis Plan Generation**: When you upload a CSV file, the application sends the data profile to the Gemini API, which generates a customized analysis plan.
-2.  **Task Management**: The `AITaskManager` class tracks the execution of the analysis plan, updating the UI with the current status of each task.
-3.  **Chart Explanations**: For each chart generated, the application sends the aggregated data to the Gemini API to produce a natural language explanation of the findings.
-4.  **Final Summary**: Once all charts and explanations are generated, the application creates a final summary of the entire analysis.
+The application follows a clear data flow from file upload to visualization:
+
+1.  **File Upload & Parsing**:
+    -   The user selects a CSV file via the `<input type="file">` element.
+    -   `main.js` listens for the `change` event and sends the file to `csv_worker.js` for parsing with **PapaParse**.
+    -   The worker streams the parsed data back to the main thread, where it is stored in **IndexedDB** for persistence.
+
+2.  **Data Profiling**:
+    -   Once parsing is complete, `ai_chart_profile.js` is invoked.
+    -   The `profileData` function iterates through the columns, using `inferType` and `inferRole` to determine the data type (e.g., `number`, `date`) and business role (e.g., `metric`, `dimension`).
+    -   This profile is crucial for the AI to understand the data's structure.
+
+3.  **AI-Powered Analysis (Auto Mode)**:
+    -   The data profile is sent to the Gemini API via `ai_chart_api.js`.
+    -   The AI returns an "analysis plan," which is a JSON object containing a list of aggregations and chart specifications.
+    -   The `AITaskManager` in `ai_chart_task_manager.js` takes this plan and executes each task sequentially.
+    -   For each chart, it sends the aggregated data back to the AI to generate a natural language explanation.
+
+4.  **Rendering**:
+    -   Aggregates and charts are rendered dynamically using **Chart.js**.
+    -   The raw data is displayed in a paginated table with search and sort functionality.
+    -   AI-generated explanations are rendered as Markdown using **Marked.js**.
+
+### Key Modules and Their Responsibilities
+
+-   **`main.js`**: The entry point of the application. It initializes event listeners for UI elements and orchestrates the overall workflow.
+-   **`ai_chart_store.js`**: A robust data layer that abstracts IndexedDB operations. It handles saving/loading session history and managing chunked CSV data, providing a simple promise-based API for the rest of the application.
+-   **`ai_chart_api.js`**: Manages all communication with the Gemini API. It includes a `fetchWithRetry` function with exponential backoff, which is a critical feature for handling API rate limits gracefully.
+-   **`ai_chart_profile.js`**: Contains the data profiling logic. The `inferType` and `inferRole` functions use a combination of regex and heuristics to analyze column data. It also includes specialized logic for ERP data patterns in `ai_chart_erp_logic.js`.
+-   **`ai_chart_task_manager.js`**: A state machine for the AI analysis workflow. It tracks the progress of each task (e.g., "generating plan," "creating chart") and updates the UI accordingly, providing real-time feedback to the user.
+-   **`ai_chart_ui_handlers.js`**: Manages UI interactions, such as rendering charts, updating tables, and handling user inputs.
+-   **`ai_chart_ai_settings_handlers.js`**: Encapsulates the logic for the AI settings modal, including saving the API key, model, and language preference to `localStorage`.
 
 ## How to Use
 
