@@ -1,17 +1,34 @@
-# CSV to Aggregates + Cards + Data Table
+# AI-Powered CSV Analysis and Visualization Tool
 
-This is a powerful CSV analysis tool that allows you to upload a CSV file and automatically generate aggregates, charts, and a data table. It features both automatic and manual modes for data analysis, a variety of chart types, and a history system to save and load your analysis sessions.
+This is a powerful, client-side CSV analysis tool that allows you to upload a CSV file and automatically generate aggregates, charts, and a data table. It features both automatic and manual modes for data analysis, a variety of chart types, and a history system to save and load your analysis sessions. The application is designed with a modular architecture and leverages AI to provide intelligent insights and streamline the data analysis process.
 
-## Features
+## Core Features
 
-- **CSV Parsing**: Upload CSV files and the application will automatically parse them. It supports auto-detection of delimiters and allows you to specify whether the first row contains headers.
-- **Data Profiling**: The application profiles your data to infer column types (number, date, string) and roles (metric, dimension, ID).
-- **Automatic Analysis**: In "Auto" mode, the application automatically generates up to 10 aggregates and charts based on the profiled data.
-- **Manual Analysis**: In "Manual" mode, you can define your own column roles and create custom aggregates.
-- **Interactive Charts**: The application uses Chart.js to generate a variety of interactive charts, including bar charts, line charts, pie charts, and more.
-- **Data Table**: View the raw data in a searchable and sortable table with pagination.
-- **History**: Save your analysis sessions and load them later. The history is stored in your browser's IndexedDB.
-- **AI Workflow**: The application includes an AI-powered workflow that can automatically generate an analysis plan and provide explanations for the generated charts.
+-   **Advanced CSV Parsing**: Upload CSV files with automatic delimiter detection. The application uses a web worker for parsing to ensure the UI remains responsive, even with large files.
+-   **Intelligent Data Profiling**: The application profiles your data to infer column types (number, date, string) and roles (metric, dimension, ID), with specialized logic for ERP data patterns.
+-   **AI-Powered Analysis**: In "Auto" mode, the application uses an AI-driven workflow to generate up to 10 aggregates and charts, complete with natural language explanations.
+-   **Interactive Visualizations**: The application uses **Chart.js** to generate a variety of interactive charts, including bar charts, line charts, pie charts, and more.
+-   **Comprehensive Data Table**: View the raw data in a searchable and sortable table with pagination and the ability to download filtered data.
+-   **Persistent History**: Save your analysis sessions and load them later. The history is stored in your browser's **IndexedDB**, ensuring that your work is preserved across sessions.
+
+## Architecture and Key Concepts
+
+The application is built with a modular architecture that promotes separation of concerns and maintainability. The core logic is organized into several key modules:
+
+-   **`ai_chart_store.js`**: Manages client-side storage using IndexedDB for session history and chunked CSV data, ensuring data persistence.
+-   **`ai_chart_api.js`**: Handles communication with the Gemini API, featuring a `fetchWithRetry` function with exponential backoff to manage rate limits.
+-   **`ai_chart_profile.js`**: Contains the logic for data profiling, including `inferType` and `inferRole` functions that automatically analyze and categorize columns.
+-   **`ai_chart_task_manager.js`**: Manages the state of the AI analysis workflow, tracking tasks from initialization to completion and updating the UI accordingly.
+-   **`ai_chart_erp_logic.js`**: Provides specialized logic for identifying and analyzing ERP data patterns, enabling more accurate and relevant insights for business data.
+
+## AI-Powered Workflow
+
+The application's AI workflow is designed to automate the data analysis process and provide users with actionable insights. Here's how it works:
+
+1.  **Analysis Plan Generation**: When you upload a CSV file, the application sends the data profile to the Gemini API, which generates a customized analysis plan.
+2.  **Task Management**: The `AITaskManager` class tracks the execution of the analysis plan, updating the UI with the current status of each task.
+3.  **Chart Explanations**: For each chart generated, the application sends the aggregated data to the Gemini API to produce a natural language explanation of the findings.
+4.  **Final Summary**: Once all charts and explanations are generated, the application creates a final summary of the entire analysis.
 
 ## How to Use
 
@@ -27,7 +44,7 @@ This is a powerful CSV analysis tool that allows you to upload a CSV file and au
     *   Save your session using the "Save as New" button.
     *   Load previous sessions from the history sidebar.
 
-## Workflow
+## Workflow Diagram
 
 ```mermaid
 graph TD
@@ -43,10 +60,10 @@ graph TD
 
 ## Technologies Used
 
-- **HTML5**
-- **CSS3**
-- **JavaScript (ESM)**
-- **Chart.js**: For data visualization.
-- **PapaParse**: For CSV parsing.
-- **Marked.js**: For rendering Markdown content.
-- **IndexedDB**: For client-side storage of history.
+-   **HTML5**
+-   **CSS3**
+-   **JavaScript (ESM)**
+-   **Chart.js**: For data visualization.
+-   **PapaParse**: For CSV parsing.
+-   **Marked.js**: For rendering Markdown content.
+-   **IndexedDB**: For client-side storage of history.
