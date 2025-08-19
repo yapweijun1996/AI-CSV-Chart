@@ -11,6 +11,8 @@ This is a powerful, client-side CSV analysis tool that allows you to upload a CS
 -   **Interactive Visualizations**: The application uses **Chart.js** to generate a variety of interactive charts, including bar charts, line charts, pie charts, and more.
 -   **Comprehensive Data Table**: View the raw data in a searchable and sortable table with pagination and the ability to download filtered data.
 -   **Persistent History**: Save your analysis sessions and load them later. The history is stored in your browser's **IndexedDB**, ensuring that your work is preserved across sessions.
+-   **AI Explanations & Summary**: With a Gemini API key, get per-card natural language explanations and an executive AI summary synthesizing insights across charts.
+-   **AI Analysis Chat**: Ask free-form questions about the current dataset and charts; responses are grounded in the active analysis context.
 
 ## Developer Guide — Technical Deep Dive
 
@@ -33,8 +35,8 @@ This section explains the project architecture, data flow, and practical impleme
 
 ### High-Level Data Flow (steps + code pointers)
 1. File upload → parsing
-   - UI: [`index.html`](index.html:1) file input triggers handler in `main.js`.
-   - Worker: `csv_worker.js` (uses PapaParse) streams rows back to main thread.
+   - UI: [`index.html`](index.html:1) handles file selection, parsing options, and event wiring directly in a module script.
+   - Worker: [`parser.worker.js`](parser.worker.js:1) (PapaParse-backed) streams rows to the main thread; the UI falls back to main-thread parsing if the worker is unavailable.
    - Storage: parsed rows are written to IndexedDB via [`ai_chart_store.js`](ai_chart_store.js:1).
 
 2. Profiling → plan generation
@@ -42,33 +44,37 @@ This section explains the project architecture, data flow, and practical impleme
    - AI call: [`ai_chart_api.js`](ai_chart_api.js:1) sends a prompt containing the profile; receives an "analysis plan" JSON.
 
 3. Task execution → charts + explanations
-   - Task manager: [`ai_chart_task_manager.js`](ai_chart_task_manager.js:1) acts as a lightweight state machine to run the plan sequentially.
-   - Aggregations: core aggregation helpers live near the task manager (look for `aggregate`/`groupBy` helpers).
+   - Task manager: [`ai_chart_task_manager.js`](ai_chart_task_manager.js:1) provides a lightweight workflow/todo tracker to visualize progress and status.
+   - Aggregations: implemented in [`index.html`](index.html:1) as pure functions (for example, groupAgg, deduplicateJobs, autoBucket) with ERP-aware helpers in [`ai_chart_erp_logic.js`](ai_chart_erp_logic.js:1) and [`ai_chart_erp_metrics.js`](ai_chart_erp_metrics.js:1).
    - Visualization: charts rendered with Chart.js; explanations rendered using Marked.js.
 
 4. UI / persistence
-   - UI handlers: [`ai_chart_ui_handlers.js`](ai_chart_ui_handlers.js:1) update DOM, create cards, and handle user interactions.
+   - UI handlers: implemented directly in [`index.html`](index.html:1) (module script). Layout and UX helpers live in [`ai_chart_masonry.js`](ai_chart_masonry.js:1), [`ai_chart_section_toggle_logic.js`](ai_chart_section_toggle_logic.js:1), and the toast system [`ai_chart_toast_system.js`](ai_chart_toast_system.js:1).
    - Session persistence: [`ai_chart_store.js`](ai_chart_store.js:1) saves sessions and chunked CSV to IndexedDB.
 
 ### File Responsibility Reference
-- [`index.html`](index.html:1) — UI layout, modals, and static assets.
-- [`main.js`](main.js:1) — app bootstrap, wiring events to modules.
-- [`csv_worker.js`](csv_worker.js:1) — background CSV parsing (PapaParse).
-- [`ai_chart_store.js`](ai_chart_store.js:1) — IndexedDB abstraction (save/load sessions).
-- [`ai_chart_profile.js`](ai_chart_profile.js:1) — data profiling heuristics.
-- [`ai_chart_erp_logic.js`](ai_chart_erp_logic.js:1) — ERP-specific heuristics (optional).
-- [`ai_chart_api.js`](ai_chart_api.js:1) — Gemini API prompt construction, `fetchWithRetry`.
-- [`ai_chart_task_manager.js`](ai_chart_task_manager.js:1) — orchestrates plan execution.
-- [`ai_chart_ui_handlers.js`](ai_chart_ui_handlers.js:1) — DOM updates, chart rendering.
-- [`ai_chart_ai_settings_handlers.js`](ai_chart_ai_settings_handlers.js:1) — settings modal, localStorage keys: `gemini_api_key`, `gemini_model`, `ai_language`.
+- [`index.html`](index.html:1) — Main app module: UI wiring, parsing/aggregation orchestration, chart/table rendering, AI chat/summary hooks.
+- [`parser.worker.js`](parser.worker.js:1) — Background CSV parsing worker (PapaParse) with streaming/progress and fallback logic.
+- [`ai_chart_store.js`](ai_chart_store.js:1) — IndexedDB abstraction (save/load sessions, chunked dataset storage).
+- [`ai_chart_profile.js`](ai_chart_profile.js:1) — Data profiling heuristics (infer types/roles, temporal/hierarchy detection).
+- [`ai_chart_erp_logic.js`](ai_chart_erp_logic.js:1) — ERP-specific analysis heuristics and prioritized plan hints.
+- [`ai_chart_erp_metrics.js`](ai_chart_erp_metrics.js:1) — ERP metric selection/prioritization helpers.
+- [`ai_chart_api.js`](ai_chart_api.js:1) — Gemini API integration and `fetchWithRetry` with exponential backoff and jitter.
+- [`ai_chart_task_manager.js`](ai_chart_task_manager.js:1) — Workflow/todo manager for analysis steps, API call tracking, progress UI.
+- [`ai_chart_masonry.js`](ai_chart_masonry.js:1) — Masonry-like card layout utilities.
+- [`ai_chart_section_toggle_logic.js`](ai_chart_section_toggle_logic.js:1) — Collapsible section toggles and accessibility.
+- [`ai_chart_toast_system.js`](ai_chart_toast_system.js:1) — Toast notifications.
+- [`ai_chart_ai_settings_handlers.js`](ai_chart_ai_settings_handlers.js:1) — Settings modal logic; localStorage keys: `gemini_api_key`, `gemini_model`, `ai_language`.
+- [`ai_chart_style.css`](ai_chart_style.css:1) — Core styles.
+- [`ai_chart_workflow.css`](ai_chart_workflow.css:1) — Enhanced workflow/agent UI styles.
 
 ### Extension Points & Typical Changes
 - Adding models or instruction templates:
-  - Edit [`ai_chart_api.js`](ai_chart_api.js:1): centralize prompt templates and language injection.
+  - Edit [`ai_chart_api.js`](ai_chart_api.js:1): centralize prompt templates, language injection, and retry/backoff behavior.
 - Custom aggregation logic:
-  - Add helpers alongside `ai_chart_task_manager.js` and update the plan-to-aggregation mapping.
+  - Modify aggregation helpers in [`index.html`](index.html:1) (e.g., groupAgg/autoPlan) and, if needed, extend profiling in [`ai_chart_profile.js`](ai_chart_profile.js:1) or ERP hints in [`ai_chart_erp_logic.js`](ai_chart_erp_logic.js:1).
 - New chart types:
-  - Update `ai_chart_ui_handlers.js` rendering paths and Chart.js config templates.
+  - Update chart rendering paths and Chart.js configs in [`index.html`](index.html:1) (computeChartConfig/renderChartCard) and related styles in [`ai_chart_style.css`](ai_chart_style.css:1).
 
 ### Debugging & Performance Tips
 - CPU-heavy work? Profile and move to worker. Use Chrome's Performance tab to find main-thread spikes.
@@ -108,9 +114,14 @@ This project is intentionally modular and approachable. For quick contributions:
 5.  **Generate Cards**: Click the "Generate Cards" button to create the aggregates and charts.
 6.  **Interact with the Data**:
     *   View the aggregates and charts in the "Aggregates" section.
-    *   Explore the raw data in the "Raw Data" table.
-    *   Save your session using the "Save as New" button.
-    *   Load previous sessions from the history sidebar.
+    *   Explore the raw data in the "Raw Data" table, including row-level include/exclude controls that immediately update aggregates.
+    *   Use per-card filters (Min Group Share/Value) and Missing group-key toggles to refine results.
+    *   Save your session using the "Save as New" button or update an existing session with "Update Report".
+    *   Load previous sessions from the history sidebar (with search, rename, bulk delete, and clear-all).
+7.  (Optional) **AI Outputs**:
+    *   When an API key is set, each card can include an AI Explanation.
+    *   The page can render a final AI Summary across all aggregates.
+    *   An AI Analysis Chat is available for asking questions grounded in your current charts and data.
 
 ## Workflow Diagram
 
