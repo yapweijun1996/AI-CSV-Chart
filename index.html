@@ -207,7 +207,7 @@
             AI is typing...
           </div>
           <div class="chat-input-area">
-            <textarea id="chat-input" class="chat-input" placeholder="Ask about your data analysis, charts, or patterns..." rows="2"></textarea>
+            <textarea id="chat-input" class="chat-input" placeholder="Ask about your data analysis, charts, or patterns..." rows="1"></textarea>
             <button id="send-chat-btn" class="send-btn" title="Send message" disabled>
               <span class="send-icon">➤</span>
             </button>
@@ -6174,31 +6174,41 @@ Please provide a helpful, insightful response based on the above data analysis c
 
 });
 
-  // Auto-expanding textarea for chat input
-  const chatInput = document.getElementById('chat-input');
-  if (chatInput) {
-    const initialHeight = chatInput.style.height;
-
-    const autoExpand = () => {
-      chatInput.style.height = 'auto';
-      chatInput.style.height = (chatInput.scrollHeight) + 'px';
-    };
-
-    chatInput.addEventListener('focus', autoExpand);
-    chatInput.addEventListener('input', autoExpand);
-
-    chatInput.addEventListener('blur', () => {
-      if (chatInput.value === '') {
-        chatInput.style.height = initialHeight;
-      }
-    });
-  }
-
 </script>
 </main>
 <div id="floating-tooltip" aria-hidden="true"></div>
 <script>
  document.addEventListener('DOMContentLoaded', () => {
+   const chatInput = document.getElementById('chat-input');
+   if (chatInput) {
+     const initialHeight = getComputedStyle(chatInput).height;
+     const expandedHeight = '120px'; // Define a larger height for focus
+ 
+     // Function to expand based on content, but not less than the expanded height
+     const autoExpand = () => {
+       chatInput.style.height = 'auto'; // Reset to calculate scrollHeight correctly
+       const scrollHeight = chatInput.scrollHeight;
+       // Use the larger of the scroll height or the defined expanded height
+       chatInput.style.height = Math.max(scrollHeight, parseInt(expandedHeight)) + 'px';
+     };
+ 
+     // On focus, expand to the defined larger height
+     chatInput.addEventListener('focus', () => {
+       chatInput.style.height = expandedHeight;
+       // Also run autoExpand in case there's already content
+       autoExpand();
+     });
+ 
+     // On input, continue to expand with content
+     chatInput.addEventListener('input', autoExpand);
+ 
+     // On blur, reset to initial height only if empty
+     chatInput.addEventListener('blur', () => {
+       if (chatInput.value.trim() === '') {
+         chatInput.style.height = initialHeight;
+       }
+     });
+   }
    const tooltip = document.getElementById('floating-tooltip');
    if (!tooltip) return;
 

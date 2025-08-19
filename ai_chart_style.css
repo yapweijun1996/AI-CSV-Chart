@@ -1785,6 +1785,7 @@ mark {
   .message-content p {
     margin: 0;
     line-height: var(--lh);
+    white-space: break-spaces;
   }
 
   .message-content p + p {
@@ -1948,7 +1949,6 @@ mark {
     resize: none;
     transition: all 0.2s ease;
     min-height: 40px;
-    max-height: 120px;
   }
 
   .chat-input:focus {
