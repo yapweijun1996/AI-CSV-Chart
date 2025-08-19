@@ -4613,8 +4613,17 @@ async function loadHistoryState(id) {
               const btn = header.querySelector('.section-toggle');
               if(btn) {
                 btn.setAttribute('aria-expanded', 'false');
-                btn.textContent = 'Show';
                 btn.setAttribute('aria-label', `Show ${headingText}`);
+                
+                // Update button text properly without breaking structure
+                const buttonTextEl = btn.querySelector('.button-text');
+                if (buttonTextEl) {
+                  buttonTextEl.textContent = 'Show';
+                } else {
+                  // Fallback: if button doesn't have proper structure, set textContent
+                  btn.textContent = 'Show';
+                }
+                
                 const content = section.querySelector('.section-content');
                 if(content) content.setAttribute('aria-hidden', 'true');
               }
@@ -6164,6 +6173,26 @@ Please provide a helpful, insightful response based on the above data analysis c
   });
 
 });
+
+  // Auto-expanding textarea for chat input
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) {
+    const initialHeight = chatInput.style.height;
+
+    const autoExpand = () => {
+      chatInput.style.height = 'auto';
+      chatInput.style.height = (chatInput.scrollHeight) + 'px';
+    };
+
+    chatInput.addEventListener('focus', autoExpand);
+    chatInput.addEventListener('input', autoExpand);
+
+    chatInput.addEventListener('blur', () => {
+      if (chatInput.value === '') {
+        chatInput.style.height = initialHeight;
+      }
+    });
+  }
 
 </script>
 </main>

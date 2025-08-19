@@ -34,10 +34,37 @@ export function initializeSectionToggles() {
       btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'section-toggle';
+      
+      const buttonText = document.createElement('span');
+      buttonText.className = 'button-text';
+      buttonText.textContent = 'Hide';
+      
       const chev = document.createElement('span');
       chev.className = 'chev';
+      chev.setAttribute('aria-hidden', 'true');
+      
+      btn.appendChild(buttonText);
       btn.appendChild(chev);
       header.appendChild(btn);
+    } else {
+      // Update existing non-standard buttons to match new structure
+      if (!btn.querySelector('.button-text')) {
+        const buttonText = document.createElement('span');
+        buttonText.className = 'button-text';
+        buttonText.textContent = btn.textContent.trim() || 'Hide';
+        
+        let chev = btn.querySelector('.chev');
+        if (!chev) {
+          chev = document.createElement('span');
+          chev.className = 'chev';
+          chev.setAttribute('aria-hidden', 'true');
+        }
+        
+        // Clear existing content and rebuild
+        btn.innerHTML = '';
+        btn.appendChild(buttonText);
+        btn.appendChild(chev);
+      }
     }
     
     const headingEl = header.querySelector('h2, h3, h4');
@@ -48,11 +75,16 @@ export function initializeSectionToggles() {
     const isCollapsed = storedStates[sectionId] === true;
     section.classList.toggle('is-collapsed', isCollapsed);
 
-    // Set initial ARIA attributes
+    // Set initial ARIA attributes and button text
     btn.setAttribute('aria-expanded', !isCollapsed);
     btn.setAttribute('aria-controls', content.id);
     content.setAttribute('aria-hidden', isCollapsed);
     btn.setAttribute('aria-label', `${isCollapsed ? 'Show' : 'Hide'} ${headingText}`);
+    
+    const buttonTextEl = btn.querySelector('.button-text');
+    if (buttonTextEl) {
+      buttonTextEl.textContent = isCollapsed ? 'Show' : 'Hide';
+    }
   }
 
   function toggleSection(section) {
@@ -70,10 +102,15 @@ export function initializeSectionToggles() {
     storedStates[sectionId] = isCollapsed;
     setStoredStates(storedStates);
 
-    // Update ARIA
+    // Update ARIA and button text
     btn.setAttribute('aria-expanded', !isCollapsed);
     content.setAttribute('aria-hidden', isCollapsed);
     btn.setAttribute('aria-label', `${isCollapsed ? 'Show' : 'Hide'} ${headingText}`);
+    
+    const buttonTextEl = btn.querySelector('.button-text');
+    if (buttonTextEl) {
+      buttonTextEl.textContent = isCollapsed ? 'Show' : 'Hide';
+    }
     
     // Re-apply masonry layout after animation if available
     if (typeof window.applyMasonryLayout === 'function') {

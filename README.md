@@ -64,6 +64,19 @@ graph TD
 -   **CSS3**
 -   **JavaScript (ESM)**
 -   **Chart.js**: For data visualization.
--   **PapaParse**: For CSV parsing.
--   **Marked.js**: For rendering Markdown content.
--   **IndexedDB**: For client-side storage of history.
+- **PapaParse**: For CSV parsing.
+- **Marked.js**: For rendering Markdown content.
+- **IndexedDB**: For client-side storage of history.
+
+## Business Use and Licensing
+
+This project is well-suited for business applications, particularly for internal data analysis and reporting. The client-side architecture ensures that all data remains on the user's machine, providing a secure environment for sensitive information.
+
+All third-party libraries used in this project are released under the **MIT License**, which is a permissive open-source license that allows for:
+
+-   **Commercial Use**: You can use this application in a commercial product.
+-   **Modification**: You can modify the source code to fit your needs.
+-   **Distribution**: You can distribute the original or modified versions of the application.
+-   **Private Use**: You are free to use the application for private purposes.
+
+This makes the project a safe and flexible choice for business use without any licensing restrictions.
