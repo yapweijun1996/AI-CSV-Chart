@@ -4,15 +4,35 @@ This is a powerful, client-side CSV analysis tool that allows you to upload a CS
 
 ## Core Features
 
--   **Advanced CSV Parsing**: Upload CSV files with automatic delimiter detection. The application uses a web worker for parsing to ensure the UI remains responsive, even with large files.
--   **Intelligent Data Profiling**: The application profiles your data to infer column types (number, date, string) and roles (metric, dimension, ID), with specialized logic for ERP data patterns.
--   **AI-Powered Analysis**: In "Auto" mode, the application uses an AI-driven workflow to generate up to 10 aggregates and charts, complete with natural language explanations.
--   **Multi-Language Support**: Select from 20 languages for the AI's responses, making the analysis accessible to a global audience.
--   **Interactive Visualizations**: The application uses **Chart.js** to generate a variety of interactive charts, including bar charts, line charts, pie charts, and more.
--   **Comprehensive Data Table**: View the raw data in a searchable and sortable table with pagination and the ability to download filtered data.
--   **Persistent History**: Save your analysis sessions and load them later. The history is stored in your browser's **IndexedDB**, ensuring that your work is preserved across sessions.
--   **AI Explanations & Summary**: With a Gemini API key, get per-card natural language explanations and an executive AI summary synthesizing insights across charts.
--   **AI Analysis Chat**: Ask free-form questions about the current dataset and charts; responses are grounded in the active analysis context.
+-   **Advanced CSV Parsing**: Upload CSV files with automatic delimiter detection. The application uses a web worker for parsing to ensure the UI remains responsive, even with large files. This allows for a smooth user experience when working with large datasets.
+-   **Intelligent Data Profiling**: The application profiles your data to infer column types (number, date, string) and roles (metric, dimension, ID), with specialized logic for ERP data patterns. This automated process saves time and reduces the need for manual configuration.
+-   **AI-Powered Analysis**: In "Auto" mode, the application uses an AI-driven workflow to generate up to 10 aggregates and charts, complete with natural language explanations. This feature provides users with instant insights and a starting point for their analysis.
+-   **Multi-Language Support**: Select from 20 languages for the AI's responses, making the analysis accessible to a global audience. This feature enhances the user experience for non-English speakers and promotes inclusivity.
+-   **Interactive Visualizations**: The application uses **Chart.js** to generate a variety of interactive charts, including bar charts, line charts, pie charts, and more. Users can customize the charts and download them as PNG images.
+-   **Comprehensive Data Table**: View the raw data in a searchable and sortable table with pagination and the ability to download filtered data. This feature provides users with a familiar and intuitive way to explore their data.
+-   **Persistent History**: Save your analysis sessions and load them later. The history is stored in your browser's **IndexedDB**, ensuring that your work is preserved across sessions. This feature allows users to pick up where they left off and compare different analysis sessions.
+-   **AI Explanations & Summary**: With a Gemini API key, get per-card natural language explanations and an executive AI summary synthesizing insights across charts. This feature provides users with a deeper understanding of their data and helps them communicate their findings to others.
+-   **AI Analysis Chat**: Ask free-form questions about the current dataset and charts; responses are grounded in the active analysis context. This feature allows users to interact with their data in a conversational way and get answers to their specific questions.
+
+## Getting Started
+
+To get started with the project, follow these steps:
+
+1.  **Clone the Repository**:
+    ```bash
+    git clone https://github.com/your-username/ai-csv-chart.git
+    ```
+2.  **Navigate to the Project Directory**:
+    ```bash
+    cd ai-csv-chart
+    ```
+3.  **Serve the Application**:
+    -   You can use any static file server to run the application. For example, you can use Python's built-in HTTP server:
+        ```bash
+        python -m http.server 8000
+        ```
+4.  **Open the Application**:
+    -   Open your web browser and navigate to `http://localhost:8000`.
 
 ## Developer Guide — Technical Deep Dive
 
@@ -140,13 +160,13 @@ graph TD
 
 ## Technologies Used
 
--   **HTML5**
--   **CSS3**
--   **JavaScript (ESM)**
--   **Chart.js**: For data visualization.
-- **PapaParse**: For CSV parsing.
-- **Marked.js**: For rendering Markdown content.
-- **IndexedDB**: For client-side storage of history.
+-   **HTML5**: The standard markup language for creating web pages and web applications.
+-   **CSS3**: The latest evolution of the Cascading Style Sheets language, used for describing the presentation of a document written in a markup language.
+-   **JavaScript (ESM)**: The programming language of the web, used to create interactive effects within web browsers.
+-   **Chart.js**: A simple yet flexible JavaScript charting library for designers and developers.
+- **PapaParse**: A powerful, in-browser CSV parser for the web.
+- **Marked.js**: A low-level compiler for parsing Markdown without caching or blocking for long periods.
+- **IndexedDB**: A transactional database system, like an SQL-based RDBMS, but with a JavaScript-based object-oriented API.
 
 ## Business Use and Licensing
 
