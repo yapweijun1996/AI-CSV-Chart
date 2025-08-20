@@ -2708,10 +2708,11 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
       </label>
       <label>Function:
         <select id="edit-function" style="width: 100%; margin-top: 4px;">
-          <option value="sum" ${aggFunction === 'sum' || aggFunction === 'count' ? 'selected' : ''}>Sum (Default for ERP)</option>
+          <option value="sum" ${aggFunction === 'sum' ? 'selected' : ''}>Sum (Default for ERP)</option>
           <option value="avg" ${aggFunction === 'avg' ? 'selected' : ''}>Average</option>
           <option value="min" ${aggFunction === 'min' ? 'selected' : ''}>Minimum</option>
           <option value="max" ${aggFunction === 'max' ? 'selected' : ''}>Maximum</option>
+          <option value="count" ${aggFunction === 'count' ? 'selected' : ''}>Count</option>
         </select>
       </label>
       <div style="display: flex; gap: 8px;">
@@ -2768,20 +2769,33 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
     // If no metric selected, force count
     const finalFunction = !newMetric ? 'count' : newFunction;
 
-    // Recompute aggregate for this card using included rows
-    const newAgg = groupAgg(getIncludedRows(), newGroupBy, newMetric, finalFunction, newBucket);
+    // Locate containers
+    const chartCard = c;
+    const chartsContainer = chartCard.parentElement;
+    const parentCard = chartsContainer?.parentElement;
 
-    // Update the current card's aggregate data (affects all charts in this card)
+    // Read current filter + missing settings from the card
+    const currentFilterValue = Number(parentCard?.querySelector('.filter-input')?.value || 0);
+    const currentFilterMode = parentCard?.querySelector('.filter-mode-select')?.value || 'share';
+    const showMissingFlag = parentCard?.dataset?.showMissing === 'true';
+
+    // Recompute aggregate for this card using included rows and current filter/missing settings
+    const newAgg = groupAgg(
+      getIncludedRows(),
+      newGroupBy,
+      newMetric,
+      finalFunction,
+      newBucket,
+      { mode: currentFilterMode, value: currentFilterValue },
+      !!showMissingFlag
+    );
+
+    // Update the current card's aggregate data (shared by all charts in this card)
     agg.header = newAgg.header;
     agg.rows = newAgg.rows;
 
     // Update the header display for this chart card
     left.textContent = `Chart for: ${newAgg.header[1]} by ${newAgg.header[0]}`;
-
-    // Find and update the associated table and persist job definition on the parent card
-    const chartCard = c;
-    const chartsContainer = chartCard.parentElement;
-    const parentCard = chartsContainer.parentElement;
 
     if (parentCard) {
       // Persist job definition so snapshots capture this edit
@@ -2790,21 +2804,58 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
       parentCard.dataset.agg = finalFunction || '';
       parentCard.dataset.dateBucket = newBucket || '';
 
+      // Update canonical key so downstream features remain consistent
+      if (typeof canonicalJobKey === 'function') {
+        parentCard.dataset.canonicalKey = canonicalJobKey({
+          groupBy: newGroupBy || '',
+          metric: newMetric || '',
+          agg: finalFunction || 'sum',
+          dateBucket: newBucket || ''
+        });
+      }
+
+      // Update the top-of-card title (avoid the AI explanation title)
+      const headTitle = parentCard.querySelector(':scope > .card-head .card-title')
+                     || parentCard.querySelector('.card-head .card-title');
+      if (headTitle) {
+        headTitle.textContent = `${finalFunction}(${newMetric || ''}) by ${newGroupBy}`;
+      }
+
       // Update card subheader
-      const cardSub = parentCard.querySelector('.card-sub');
+      const cardSub = parentCard.querySelector(':scope > .card-head .card-sub')
+                   || parentCard.querySelector('.card-head .card-sub');
       if (cardSub) {
         cardSub.textContent = `${newAgg.rows.length} groups · ${newAgg.header[1]}`;
       }
 
-      // Re-render table
+      // Clear and re-add missing data warning
+      parentCard.querySelectorAll('.missing-data-warning').forEach(w => w.remove());
+      addMissingDataWarning(parentCard, newAgg, getIncludedRows().length, !!showMissingFlag);
+
+      // Re-render table with correct showMissing
       const tableBox = parentCard.querySelector('.table-wrap');
       if (tableBox) {
-        renderAggTable(agg, tableBox, 20);
+        renderAggTable(newAgg, tableBox, 20, !!showMissingFlag);
       }
-    }
 
-    // Redraw the chart with new data
-    draw();
+      // Redraw ALL chart cards in this parent (not only the one being edited)
+      if (chartsContainer) {
+        chartsContainer.querySelectorAll('.chart-card').forEach(cc => {
+          const canvas = cc.querySelector('canvas');
+          const typeSelEl = cc.querySelector('select');
+          const topNEl = cc.querySelector('input[type="number"]');
+          if (canvas && typeSelEl && topNEl) {
+            const cfg = computeChartConfig(newAgg, typeSelEl.value, Number(topNEl.value) || 20, { noAnimation: true });
+            ensureChart(canvas, cfg, true);
+          }
+        });
+      }
+
+      // Keep layout stable after edits
+      requestAnimationFrame(() => {
+        try { applyMasonryLayout(); } catch {}
+      });
+    }
 
     // Regenerate AI explanation for this card with the updated config (if API key available)
     try {
