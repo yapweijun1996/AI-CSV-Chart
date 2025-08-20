@@ -2759,7 +2759,7 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
   };
   
   // Apply changes functionality
-  editPanel.querySelector('#edit-apply').onclick = () => {
+  editPanel.querySelector('#edit-apply').onclick = async () => {
     const newGroupBy = editPanel.querySelector('#edit-groupby').value;
     const newBucket = editPanel.querySelector('#edit-bucket').value;
     const newMetric = editPanel.querySelector('#edit-metric').value || null;
@@ -2805,6 +2805,18 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
 
     // Redraw the chart with new data
     draw();
+
+    // Regenerate AI explanation for this card with the updated config (if API key available)
+    try {
+      await generateExplanation(newAgg, {
+        groupBy: newGroupBy || '',
+        metric: newMetric,
+        agg: finalFunction || 'sum',
+        dateBucket: newBucket || ''
+      }, parentCard);
+    } catch (e) {
+      console.warn('Failed to regenerate explanation after edit apply:', e);
+    }
 
     // Hide edit panel
     editPanel.style.display = 'none';
@@ -3505,12 +3517,15 @@ function renderExplanationCard(parentCard, title, contentHTML) {
   contentEl.innerHTML = contentHTML;
   explanationContainer.appendChild(contentEl);
 
-  const cardFoot = parentCard.querySelector('.card-foot');
-  if (cardFoot) {
-    cardFoot.insertAdjacentElement('afterend', explanationContainer);
-  } else {
-    parentCard.appendChild(explanationContainer);
+  // Prefer a stable slot inside card-content so re-rendering the table doesn't remove the explanation
+  const cardContent = parentCard.querySelector('.card-content');
+  let explanationSlot = parentCard.querySelector('.explanation-slot');
+  if (!explanationSlot && cardContent) {
+    explanationSlot = document.createElement('div');
+    explanationSlot.className = 'explanation-slot';
+    cardContent.appendChild(explanationSlot);
   }
+  (explanationSlot || cardContent || parentCard).appendChild(explanationContainer);
   
   return { explanationContainer, contentEl, regenerateBtn };
 }
@@ -4364,6 +4379,13 @@ function getUiSnapshot() {
   const aiSummaryContent = aiSummaryText ? aiSummaryText.innerHTML : null;
   const aiSummaryVisible = document.getElementById('ai-summary-section')?.style.display !== 'none';
 
+  // Capture AI Analysis Chat history if it exists
+  const chatHistory = window.chatState ? {
+    messages: window.chatState.messages || [],
+    lastContextRefresh: window.chatState.lastContextRefresh || null,
+    timestamp: Date.now()
+  } : null;
+
   return {
     mode: MODE,
     manualRoles: MANUAL_ROLES,
@@ -4381,7 +4403,8 @@ function getUiSnapshot() {
       content: aiSummaryContent,
       visible: aiSummaryVisible,
       timestamp: aiSummaryContent ? Date.now() : null
-    }
+    },
+    chatHistory: chatHistory
   };
 }
 
@@ -4666,6 +4689,36 @@ async function loadHistoryState(id) {
           aiSummarySection.style.display = 'none';
           console.log('🔒 AI Summary content restored but section hidden (no API key or was not visible)');
         }
+      }
+    }
+
+    // Restore AI Analysis Chat history if it exists
+    if (snapshot.chatHistory && snapshot.chatHistory.messages && Array.isArray(snapshot.chatHistory.messages)) {
+      console.log('💬 Restoring saved chat history:', snapshot.chatHistory.messages.length, 'messages');
+      
+      // Initialize chat state if not already done
+      if (!window.chatState) {
+        window.chatState = {
+          messages: [],
+          isTyping: false,
+          lastContextRefresh: null
+        };
+      }
+      
+      // Restore messages and state
+      window.chatState.messages = snapshot.chatHistory.messages;
+      window.chatState.lastContextRefresh = snapshot.chatHistory.lastContextRefresh;
+      
+      console.log('✅ Chat history restored successfully');
+    } else {
+      console.log('📝 No chat history found in snapshot');
+      // Initialize empty chat state
+      if (!window.chatState) {
+        window.chatState = {
+          messages: [],
+          isTyping: false,
+          lastContextRefresh: null
+        };
       }
     }
 
@@ -5506,8 +5559,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ========= AI Analysis Chat Implementation =========
   
-  // Chat state management
-  const chatState = {
+  // Chat state management (make it global for snapshot saving)
+  window.chatState = {
     messages: [],
     isTyping: false,
     lastContextRefresh: null
@@ -5725,7 +5778,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSummaryBreakdown(context.summary || null);
     updateDatasetBreakdown(context.dataset || null);
     
-    chatState.lastContextRefresh = context.timestamp;
+    window.chatState.lastContextRefresh = context.timestamp;
   }
 
   // Update chart data breakdown
@@ -5850,8 +5903,22 @@ document.addEventListener('DOMContentLoaded', () => {
       timestamp: new Date()
     };
     
-    chatState.messages.push(message);
+    window.chatState.messages.push(message);
     renderChatMessage(message);
+    
+    // Auto-save chat history to current report
+    if (window.currentHistoryId && typeof Store !== 'undefined') {
+      try {
+        Store.updateHistory(window.currentHistoryId, { 
+          uiSnapshot: getUiSnapshot(), 
+          updatedAt: Date.now() 
+        }).catch(error => {
+          console.warn('Failed to auto-save chat message:', error);
+        });
+      } catch (error) {
+        console.warn('Failed to auto-save chat message:', error);
+      }
+    }
     
     // Scroll to bottom
     const messagesContainer = document.getElementById('chat-messages');
@@ -5912,7 +5979,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typingIndicator) {
       typingIndicator.style.display = 'flex';
     }
-    chatState.isTyping = true;
+    window.chatState.isTyping = true;
   }
 
   // Hide typing indicator
@@ -5921,7 +5988,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typingIndicator) {
       typingIndicator.style.display = 'none';
     }
-    chatState.isTyping = false;
+    window.chatState.isTyping = false;
   }
 
   // Send chat message to AI
@@ -6079,7 +6146,7 @@ Please provide a helpful, insightful response based on the above data analysis c
     // Send message on button click
     sendBtn.addEventListener('click', () => {
       const message = chatInput.value.trim();
-      if (message && !chatState.isTyping) {
+      if (message && !window.chatState.isTyping) {
         chatInput.value = '';
         sendBtn.disabled = true;
         sendChatMessage(message);
@@ -6096,7 +6163,7 @@ Please provide a helpful, insightful response based on the above data analysis c
 
     // Enable/disable send button based on input
     chatInput.addEventListener('input', () => {
-      sendBtn.disabled = !chatInput.value.trim() || chatState.isTyping;
+      sendBtn.disabled = !chatInput.value.trim() || window.chatState.isTyping;
     });
 
     // Refresh context button
@@ -6113,7 +6180,7 @@ Please provide a helpful, insightful response based on the above data analysis c
     // Clear chat button
     if (clearChatBtn) {
       clearChatBtn.addEventListener('click', () => {
-        chatState.messages = [];
+        window.chatState.messages = [];
         const messagesContainer = document.getElementById('chat-messages');
         if (messagesContainer) {
           messagesContainer.innerHTML = `
@@ -6127,6 +6194,21 @@ Please provide a helpful, insightful response based on the above data analysis c
             </div>
           `;
         }
+        
+        // Auto-save the cleared chat state to history
+        if (window.currentHistoryId && typeof Store !== 'undefined') {
+          try {
+            Store.updateHistory(window.currentHistoryId, { 
+              uiSnapshot: getUiSnapshot(), 
+              updatedAt: Date.now() 
+            }).catch(error => {
+              console.warn('Failed to auto-save cleared chat:', error);
+            });
+          } catch (error) {
+            console.warn('Failed to auto-save cleared chat:', error);
+          }
+        }
+        
         if (typeof showToast === 'function') {
           showToast('Chat history cleared!');
         }
@@ -6145,9 +6227,46 @@ Please provide a helpful, insightful response based on the above data analysis c
       });
     }
 
+    // Restore chat messages if they exist
+    restoreChatMessages();
+    
     // Initialize context
     const context = gatherAnalysisContext();
     updateContextStatus(context);
+  }
+
+  // Function to restore chat messages from saved state
+  function restoreChatMessages() {
+    const messagesContainer = document.getElementById('chat-messages');
+    if (!messagesContainer || !window.chatState || !window.chatState.messages) return;
+    
+    // Clear existing messages
+    messagesContainer.innerHTML = '';
+    
+    if (window.chatState.messages.length === 0) {
+      // Show welcome message if no saved messages
+      messagesContainer.innerHTML = `
+        <div class="welcome-message">
+          <div class="ai-message">
+            <div class="message-avatar">🤖</div>
+            <div class="message-content">
+              <p>Hello! I'm your AI assistant for data analysis. I have access to your current charts, aggregations, and data patterns. Ask me anything about your data!</p>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      // Restore all saved messages
+      console.log('💬 Rendering', window.chatState.messages.length, 'restored chat messages');
+      window.chatState.messages.forEach(message => {
+        renderChatMessage(message);
+      });
+      
+      // Scroll to bottom
+      setTimeout(() => {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }, 100);
+    }
   }
 
   // Hook into existing data loading to show chat
