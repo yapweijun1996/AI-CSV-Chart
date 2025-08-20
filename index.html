@@ -1157,7 +1157,7 @@ function deduplicateJobs(jobs) {
 function addMissingDataWarning(card, aggResult, totalRows, showMissing) {
 
     if (aggResult.missingCount > 0) {
-        const missingShare = aggResult.missingCount / totalRows;
+        const missingShare = aggResult.missingCount / (totalRows || 1);
         // Use a configurable threshold, for now hardcode 0.1 (10%)
         const missingWarningThreshold = 0.1;
         if (missingShare > missingWarningThreshold) {
@@ -1170,9 +1170,9 @@ function addMissingDataWarning(card, aggResult, totalRows, showMissing) {
             warning.style.fontSize = '13px';
 
             if (showMissing) {
-                warning.innerHTML = `<strong>Note:</strong> ${aggResult.missingCount.toLocaleString()} rows (${(missingShare * 100).toFixed(1)}%) with missing group values are included in the '(Missing)' category. <a href="#" class="exclude-missing-link" style="text-decoration: underline; color: #b45309;">Exclude them</a>.`;
+                warning.innerHTML = `<strong>Note:</strong> ${aggResult.missingCount.toLocaleString()} rows (${(missingShare * 100).toFixed(1)}%) with missing group values are included in the '(Missing)' category.`;
             } else {
-                warning.innerHTML = `<strong>Warning:</strong> ${aggResult.missingCount.toLocaleString()} rows (${(missingShare * 100).toFixed(1)}%) had missing values for grouping and were excluded. <a href="#" class="include-missing-link" style="text-decoration: underline; color: #b45309;">Include them as '(Missing)'</a>.`;
+                warning.innerHTML = `<strong>Warning:</strong> ${aggResult.missingCount.toLocaleString()} rows (${(missingShare * 100).toFixed(1)}%) had missing values for grouping and were excluded. Use the card control "Include '(Missing)' group" to include them.`;
             }
 
             // Prepend to card content
@@ -2198,7 +2198,8 @@ function groupAgg(rows, groupBy, metric, agg, dateBucket='', filterConfig = { mo
       if (!showMissing) continue;
     }
     const finalKey = key === null ? '(Missing)' : key;
-    if (agg==='count' && !metric){
+    if (agg === 'count') {
+      // For count aggregations, always count the row regardless of metric value
       m.set(finalKey, (m.get(finalKey)||0) + 1);
     } else {
       const v = toNum(r[metric]);
@@ -3681,6 +3682,22 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     `;
 
     controls.append(filterLabel, filterInput, filterModeSelect);
+    
+    // Add per-card missing data toggle control (default Off)
+    const missingToggleWrap = document.createElement('label');
+    missingToggleWrap.style.marginRight = '12px';
+    const missingToggle = document.createElement('input');
+    missingToggle.type = 'checkbox';
+    missingToggle.checked = !!showMissing;
+    missingToggle.style.marginRight = '6px';
+    missingToggle.addEventListener('change', () => {
+        reRenderCard(!!missingToggle.checked);
+        debouncedAutoSave();
+    });
+    missingToggleWrap.appendChild(missingToggle);
+    missingToggleWrap.appendChild(document.createTextNode("Include '(Missing)' group"));
+    // Place toggle before other controls
+    controls.prepend(missingToggleWrap);
 
     const applyFilterOnChange = () => {
         reRenderCard(card.dataset.showMissing === 'true');
@@ -3954,8 +3971,9 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
             WorkflowManager.reset();
             for (const cardSnap of chartsSnapshot) {
                 const jobKey = cardSnap.cardJobKey || {};
-                const card = await buildAggCard(jobKey, cardSnap);
-                grid.appendChild(card);
+                const result = await buildAggCard(jobKey, cardSnap);
+                const newCard = result.card || result;
+                grid.appendChild(newCard);
             }
             setTimeout(applyMasonryLayout, 150);
             setTimeout(applyMasonryLayout, 500);
@@ -4133,42 +4151,6 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
 /* ========= Modal accessibility: ESC & backdrop ========= */
 document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ document.querySelectorAll('.modal.open').forEach(m=>m.classList.remove('open')); }});
 
-/* ========= Missing values toggle event delegation ========= */
-document.addEventListener('click', async (e) => {
-    if (e.target.matches('.include-missing-link, .exclude-missing-link')) {
-        e.preventDefault();
-        const link = e.target;
-        
-        if (link.dataset.processing) return;
-        link.dataset.processing = 'true';
-        
-        try {
-            const warning = link.closest('.missing-data-warning');
-            const cardElement = warning?.closest('.card');
-            if (cardElement) {
-                const job = {
-                    groupBy: cardElement.dataset.groupBy,
-                    metric: cardElement.dataset.metric,
-                    agg: cardElement.dataset.agg,
-                    dateBucket: cardElement.dataset.dateBucket
-                };
-                const cardState = {
-                    showMissing: link.classList.contains('include-missing-link'),
-                    filterValue: Number(cardElement.querySelector('.filter-input')?.value || 0),
-                    filterMode: cardElement.querySelector('.filter-mode-select')?.value || 'share'
-                };
-                const newCard = await buildAggCard(job, cardState);
-                cardElement.replaceWith(newCard);
-                applyMasonryLayout();
-            }
-        } catch (error) {
-            console.error('Error toggling missing values:', error);
-            showToast?.('Failed to toggle missing values', 'error');
-        } finally {
-            delete link.dataset.processing;
-        }
-    }
-});
 ['roleModal','aggModal', 'historyModal', 'removedRowsModal', 'aiSettingsModal'].forEach(id=>{ const m = document.getElementById(id); m?.addEventListener('click', (e)=>{ if (e.target===m) m.classList.remove('open'); }); });
 $('#closeRemovedRowsModal').onclick = () => $('#removedRowsModal').classList.remove('open');
 
