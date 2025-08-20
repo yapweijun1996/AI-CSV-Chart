@@ -3905,9 +3905,9 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
             generateExplanation(initialAgg, job, card);
         };
     } else if (!skipExplanation) {
-        // Don't await here, let it run in the background but track the promise
-        const explanationPromise = generateExplanation(initialAgg, job, card);
-        return { card, initialAgg, job, explanationPromise };
+        // Don't generate explanation here, instead return the task to be queued
+        const explanationTask = { agg: initialAgg, job, card };
+        return { card, initialAgg, job, explanationTask };
     }
  
     return { card, initialAgg, job };
@@ -3939,7 +3939,8 @@ async function getAiAnalysisPlan(context) {
                 description: 'Run ERP-specific analysis based on metric priorities',
                 type: 'erp-analysis'
             }],
-            jobs: jobs
+            jobs: jobs,
+            planType: 'erp-analysis'
         };
     }
 
@@ -3951,7 +3952,8 @@ async function getAiAnalysisPlan(context) {
             description: 'Run standard automatic analysis',
             type: 'auto-analysis'
         }],
-        jobs: plan.jobs
+        jobs: plan.jobs,
+        planType: 'auto-analysis'
     };
 }
 
@@ -4087,82 +4089,53 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 if (uniqueJobs.length !== plan.jobs.length) {
                     plan.jobs = uniqueJobs;
                 }
-                // Track explanation promises for proper workflow completion
-                const explanationPromises = [];
+                
+                const explanationQueue = [];
                 
                 const processJobsIncrementally = async () => {
                     for (let i = 0; i < plan.jobs.length; i++) {
                         const job = plan.jobs[i];
-                        if (WorkflowManager.getState().status !== 'running') break;
-                        
-                        // Check if session is still current (prevents stale results)
-                        if (window.currentAggregationSession !== aggregationSessionId) {
-                            console.log(`⏹️ Skipping job due to session mismatch: current=${window.currentAggregationSession}, expected=${aggregationSessionId}`);
+                        if (WorkflowManager.getState().status !== 'running' || window.currentAggregationSession !== aggregationSessionId) {
                             break;
                         }
                         
                         console.log(`🔨 Building card ${i + 1}/${plan.jobs.length}: ${job.agg}(${job.metric}) by ${job.groupBy} [session: ${aggregationSessionId}]`);
                         const result = await buildAggCard(job, {}, aggregationSessionId);
                         
-                        // Double-check session before DOM insertion
-                        if (window.currentAggregationSession === aggregationSessionId) {
+                        if (result && window.currentAggregationSession === aggregationSessionId) {
                             grid.appendChild(result.card);
-                            
-                            // Track explanation promises if they were started
-                            if (result.explanationPromise) {
-                                explanationPromises.push(
-                                    result.explanationPromise.catch(error => {
-                                        console.warn(`Explanation generation failed for card ${i + 1}:`, error);
-                                        return null; // Continue even if explanation fails
-                                    })
-                                );
+                            if (result.explanationTask) {
+                                explanationQueue.push(result.explanationTask);
                             }
-                        } else {
-                            console.log(`⏹️ Discarding card due to session change`);
                         }
-                        
-                        await new Promise(resolve => setTimeout(resolve, 50));
                     }
                 };
-                
+
                 await processJobsIncrementally();
-                
+
                 // Complete analysis task now that we're ready to build cards
-                WorkflowManager.completeTask('auto-analysis', 'AI analysis plan created. Building cards...');
-                WorkflowManager.completeTask('erp-analysis', 'ERP analysis completed. Building cards...');
+                if (plan.planType === 'auto-analysis') {
+                   WorkflowManager.completeTask('auto-analysis', 'AI analysis plan created. Building cards...');
+                } else if (plan.planType === 'erp-analysis') {
+                   WorkflowManager.completeTask('erp-analysis', 'ERP analysis completed. Building cards...');
+                }
                 
                 if (WorkflowManager.getState().status === 'running') {
                     WorkflowManager.completeTask('rendering');
                     await new Promise(resolve => setTimeout(resolve, 50));
                     
-                    // Wait for all explanation promises to complete before marking ai-explanation as done
-                    if (explanationPromises.length > 0) {
-                        console.log(`⏳ Waiting for ${explanationPromises.length} explanation(s) to complete...`);
-                        WorkflowManager.updateCurrentTaskMessage(`Generating ${explanationPromises.length} explanations...`);
-                        
-                        // Monitor progress of explanations
-                        let completedCount = 0;
-                        const progressPromises = explanationPromises.map((promise, index) =>
-                            promise.finally(() => {
-                                completedCount++;
-                                WorkflowManager.updateCurrentTaskMessage(`Completed ${completedCount}/${explanationPromises.length} explanations...`);
-                                
-                                // Auto-save after each explanation is completed
-                                console.log(`🔄 Triggering auto-save after explanation ${completedCount}/${explanationPromises.length}...`);
-                                debouncedAutoSave();
-                            })
-                        );
-                        
-                        try {
-                            await Promise.allSettled(progressPromises);
-                            console.log(`✅ All ${explanationPromises.length} explanations completed`);
-                            
-                            // Auto-save after all explanations are completed
-                            console.log(`🔄 Triggering final auto-save after all ${explanationPromises.length} explanations completed...`);
+                    // Process the explanation queue sequentially
+                    if (explanationQueue.length > 0) {
+                        console.log(`⏳ Starting sequential generation of ${explanationQueue.length} explanation(s)...`);
+                        for (let i = 0; i < explanationQueue.length; i++) {
+                            const task = explanationQueue[i];
+                            WorkflowManager.updateCurrentTaskMessage(`Generating explanation ${i + 1} of ${explanationQueue.length}...`);
+                            await generateExplanation(task.agg, task.job, task.card);
+                            console.log(`✅ Explanation ${i + 1} completed.`);
+                            console.log(`🔄 Triggering auto-save after explanation ${i + 1}...`);
                             debouncedAutoSave();
-                        } catch (error) {
-                            console.warn('Some explanations may have failed:', error);
                         }
+                        console.log('✅ All explanations completed sequentially.');
                     } else {
                         console.log('ℹ️ No explanations to generate');
                     }
