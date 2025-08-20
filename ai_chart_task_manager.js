@@ -25,7 +25,12 @@ export class AITaskManager {
         }
     }
 
-    getNextTask() {
+    getNextTask(agentId = null) {
+        if (agentId) {
+            const agent = this.agentTasks.get(agentId);
+            if (!agent) return null;
+            return agent.todos.find(task => task.status === 'pending');
+        }
         return this.currentPlan.find(task => task.status === 'pending');
     }
 
@@ -133,7 +138,10 @@ export class AITaskManager {
     // Complete a task and optionally add follow-up tasks
     completeTask(agentId, taskId, message = null, followUpTasks = []) {
         const agent = this.agentTasks.get(agentId);
-        if (!agent) return;
+        if (!agent) {
+            console.warn(`⚠️ TaskManager.completeTask: Agent ${agentId} not found (likely reset)`);
+            return;
+        }
         
         const task = agent.todos.find(t => t.id === taskId);
         if (task) {
@@ -141,10 +149,20 @@ export class AITaskManager {
             task.message = message;
             task.completedAt = new Date();
             
+            // Clear timeout if set
+            if (task.timeoutId) {
+                clearTimeout(task.timeoutId);
+                delete task.timeoutId;
+            }
+            
+            console.log(`✅ TaskManager: Task ${taskId} completed for agent ${agentId}`);
+            
             // Add follow-up tasks
             followUpTasks.forEach(followUp => {
                 this.addTask(agentId, followUp.description, followUp.type || 'general', taskId);
             });
+        } else {
+            console.warn(`⚠️ TaskManager.completeTask: Task ${taskId} not found for agent ${agentId}`);
         }
         
         this.notify();
@@ -153,13 +171,26 @@ export class AITaskManager {
     // Mark task as failed
     failTask(agentId, taskId, error) {
         const agent = this.agentTasks.get(agentId);
-        if (!agent) return;
+        if (!agent) {
+            console.warn(`⚠️ TaskManager.failTask: Agent ${agentId} not found`);
+            return;
+        }
         
         const task = agent.todos.find(t => t.id === taskId);
         if (task) {
             task.status = 'error';
             task.message = error.message || error;
             task.failedAt = new Date();
+            
+            // Clear timeout if set
+            if (task.timeoutId) {
+                clearTimeout(task.timeoutId);
+                delete task.timeoutId;
+            }
+            
+            console.error(`❌ TaskManager: Task ${taskId} failed for agent ${agentId}:`, error);
+        } else {
+            console.warn(`⚠️ TaskManager.failTask: Task ${taskId} not found for agent ${agentId}`);
         }
         
         agent.status = 'error';
@@ -169,12 +200,16 @@ export class AITaskManager {
     // Start working on next pending task
     startNextTask(agentId) {
         const agent = this.agentTasks.get(agentId);
-        if (!agent) return null;
+        if (!agent) {
+            console.warn(`⚠️ TaskManager: Agent ${agentId} not found`);
+            return null;
+        }
 
-        const nextTask = this.getNextTask();
+        const nextTask = this.getNextTask(agentId);
         if (nextTask) {
             nextTask.status = 'in-progress';
             nextTask.startedAt = new Date();
+            nextTask.timeoutId = this.setTaskTimeout(agentId, nextTask.id);
             agent.status = 'running';
             this.notify();
             this.executeTask(nextTask);
@@ -192,32 +227,68 @@ export class AITaskManager {
     }
 
     async executeTask(task) {
+        console.log(`🔄 TaskManager: Executing task ${task.id} (${task.type}): ${task.description}`);
+        
         try {
-            // Simple task execution dispatcher
+            // Task execution dispatcher with proper completion logic
             switch (task.type) {
                 case 'data-validation':
-                    // Placeholder for data validation logic
                     console.log(`Executing data validation: ${task.description}`);
+                    await this.simulateWork(500);
+                    this.completeTask(task.agentId, task.id, 'Data validation completed');
                     break;
                 case 'exploratory-analysis':
-                    // Placeholder for exploratory analysis
                     console.log(`Executing exploratory analysis: ${task.description}`);
+                    await this.simulateWork(1000);
+                    this.completeTask(task.agentId, task.id, 'Exploratory analysis completed');
                     break;
                 case 'visualization':
-                    // Placeholder for visualization
                     console.log(`Executing visualization: ${task.description}`);
+                    await this.simulateWork(800);
+                    this.completeTask(task.agentId, task.id, 'Visualization task completed');
                     break;
                 case 'auto-analysis':
                     // Don't auto-complete this task - it will be completed manually when cards are built
                     console.log(`Started auto-analysis task: ${task.description} (will be completed during card building)`);
+                    this.updateCurrentTaskMessage(task.agentId, task.id, 'Auto-analysis in progress, awaiting card generation');
                     return; // Don't complete automatically
+                case 'erp-analysis':
+                    // Don't auto-complete this task - it will be completed manually when ERP cards are built
+                    console.log(`Started ERP-analysis task: ${task.description} (will be completed during card building)`);
+                    this.updateCurrentTaskMessage(task.agentId, task.id, 'ERP analysis in progress, awaiting card generation');
+                    return; // Don't complete automatically
+                case 'init':
+                case 'analysis':
+                case 'ai-generation':
+                case 'config':
+                case 'rendering':
+                case 'ai-explanation':
+                case 'completion':
+                    console.log(`Executing ${task.type} task: ${task.description}`);
+                    await this.simulateWork(600);
+                    // Check if agent and task still exist before completing (might be reset)
+                    const agent = this.agentTasks.get(task.agentId);
+                    const taskStillExists = agent && agent.todos.find(t => t.id === task.id);
+                    if (taskStillExists) {
+                        this.completeTask(task.agentId, task.id, `${task.type} task completed`);
+                    } else {
+                        console.log(`⏹️ TaskManager: Skipping completion for ${task.id} - task or agent was reset`);
+                    }
+                    break;
                 default:
                     console.log(`Executing general task: ${task.description}`);
+                    await this.simulateWork(500);
+                    // Check if agent and task still exist before completing (might be reset)
+                    const currentAgent = this.agentTasks.get(task.agentId);
+                    const taskExists = currentAgent && currentAgent.todos.find(t => t.id === task.id);
+                    if (taskExists) {
+                        this.completeTask(task.agentId, task.id, 'Task completed successfully');
+                    } else {
+                        console.log(`⏹️ TaskManager: Skipping completion for ${task.id} - task or agent was reset`);
+                    }
             }
-            // Simulate async work
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            this.completeTask(task.agentId, task.id, 'Task completed successfully.');
         } catch (error) {
+            console.error(`❌ TaskManager: Task ${task.id} failed:`, error);
             this.failTask(task.agentId, task.id, error);
         }
     }
@@ -240,6 +311,31 @@ export class AITaskManager {
             pending: total - completed - failed - inProgress,
             progress: total > 0 ? (completed / total) * 100 : 0
         };
+    }
+
+    // Set timeout for a task
+    setTaskTimeout(agentId, taskId, timeoutMs = 300000) { // 5 minutes default
+        return setTimeout(() => {
+            console.warn(`⏰ TaskManager: Task ${taskId} timed out for agent ${agentId}`);
+            this.failTask(agentId, taskId, new Error(`Task timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+    }
+    
+    // Update task message
+    updateCurrentTaskMessage(agentId, taskId, message) {
+        const agent = this.agentTasks.get(agentId);
+        if (!agent) return;
+        
+        const task = agent.todos.find(t => t.id === taskId);
+        if (task) {
+            task.message = message;
+            this.notify();
+        }
+    }
+    
+    // Helper for simulating async work
+    async simulateWork(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     generateTaskId() {
@@ -296,8 +392,22 @@ export function createWorkflowManager(aiTasks) {
         },
 
         reset(mode = 'auto') {
+            // Clear any existing timeouts for old agents
+            if (currentAgentId) {
+                const oldAgent = aiTasks.agentTasks.get(currentAgentId);
+                if (oldAgent) {
+                    oldAgent.todos.forEach(task => {
+                        if (task.timeoutId) {
+                            clearTimeout(task.timeoutId);
+                        }
+                    });
+                }
+            }
+            
+            console.log(`🔄 WorkflowManager: Resetting workflow (mode: ${mode}), old agent: ${currentAgentId}`);
             aiTasks.reset();
             currentAgentId = aiTasks.createLegacyWorkflow(mode);
+            console.log(`🔄 WorkflowManager: New agent created: ${currentAgentId}`);
             legacyMode = true;
         },
 
@@ -327,6 +437,7 @@ export function createWorkflowManager(aiTasks) {
                         }
                     } else {
                         console.warn(`⚠️ WorkflowManager.completeTask: Task not found: ${taskId}`);
+                        console.log(`🔍 Available tasks:`, agent.todos.map(t => `${t.type}:${t.status}`));
                     }
                 } else {
                     console.warn(`⚠️ WorkflowManager.completeTask: Agent not found for ${taskId}`);
@@ -435,10 +546,22 @@ export function createWorkflowManager(aiTasks) {
             if (currentAgentId) {
                 const agent = aiTasks.agentTasks.get(currentAgentId);
                 if (agent) {
-                    const currentTask = agent.todos.find(t => t.status === 'in-progress');
+                    let currentTask = agent.todos.find(t => t.status === 'in-progress');
+                    
+                    // If no in-progress task, try to start the next pending task
+                    if (!currentTask) {
+                        console.log(`🔄 WorkflowManager.updateCurrentTaskMessage: No in-progress task, trying to start next task`);
+                        const nextTask = aiTasks.startNextTask(currentAgentId);
+                        currentTask = nextTask;
+                    }
+                    
                     if (currentTask) {
                         currentTask.message = message;
+                        console.log(`🔄 WorkflowManager: Updated task ${currentTask.type} message: ${message}`);
                         aiTasks.notify();
+                    } else {
+                        console.warn(`⚠️ WorkflowManager.updateCurrentTaskMessage: Still no in-progress task found`);
+                        console.log(`🔍 Available tasks:`, agent.todos.map(t => `${t.type}:${t.status}`));
                     }
                 }
             }

@@ -574,13 +574,20 @@ function updateAiTodoList(data) {
 
     container.style.display = 'block';
 
-    // Enhanced progress calculation
+    // Enhanced progress calculation - include in-progress tasks as partial progress
     const completedTasks = tasks.filter(task => task.status === 'completed').length;
+    const inProgressTasks = tasks.filter(task => task.status === 'in-progress').length;
     const failedTasks = tasks.filter(task => task.status === 'error').length;
-    const progress = tasks.length > 0 ? (completedTasks / tasks.length) * 100 : 0;
+    
+    // Calculate progress: completed = 100%, in-progress = 50%, pending = 0%
+    const progressPoints = completedTasks * 1.0 + inProgressTasks * 0.5;
+    const progress = tasks.length > 0 ? (progressPoints / tasks.length) * 100 : 0;
     
     progressBar.style.width = `${progress}%`;
     progressBar.setAttribute('aria-valuenow', progress);
+    
+    // Debug progress bar updates
+    console.log(`🔄 Progress Bar Update: ${Math.round(progress)}% (${completedTasks} completed, ${inProgressTasks} in-progress, ${tasks.length} total)`);
     
     // Color code progress bar based on status
     progressBar.className = failedTasks > 0 ? 'progress-error' : 
@@ -726,11 +733,20 @@ function updateAiTodoList(data) {
         `;
         container.appendChild(statusDiv);
         
-        // Hide the workflow section after 3 seconds
-        setTimeout(() => {
-            console.log('🫥 Hiding completed workflow section');
-            container.style.display = 'none';
-        }, 3000);
+        // Hide the workflow section after 5 seconds, but only if no new workflow starts
+        const hideTimeout = setTimeout(() => {
+            // Double-check the workflow is still completed and no new tasks are running
+            const currentState = WorkflowManager.getState();
+            if (currentState.status === 'completed') {
+                console.log('🫥 Hiding completed workflow section');
+                container.style.display = 'none';
+            } else {
+                console.log('🔄 Workflow reactivated, keeping section visible');
+            }
+        }, 5000);
+        
+        // Store timeout ID so it can be cleared if workflow restarts
+        container.hideTimeout = hideTimeout;
     } else if (status === 'error') {
         const errorDetails = error?.message || 'Unknown error occurred';
         statusDiv.innerHTML = `
@@ -743,6 +759,13 @@ function updateAiTodoList(data) {
         `;
         container.appendChild(statusDiv);
     } else if (status === 'running' && currentTaskIndex > -1) {
+        // Clear any pending hide timeout since workflow is active again
+        if (container.hideTimeout) {
+            clearTimeout(container.hideTimeout);
+            container.hideTimeout = null;
+            console.log('🔄 Cleared workflow hide timeout - workflow is running again');
+        }
+        
         const currentTime = new Date().toLocaleTimeString();
         const elapsedTime = workflowTimer.getElapsed();
         const currentTask = state.tasks[currentTaskIndex];
@@ -891,7 +914,27 @@ document.addEventListener('click', (e) => {
     try {
         switch (action) {
             case 'retry':
+                // Disable the button to prevent multiple clicks
+                e.target.disabled = true;
+                e.target.textContent = 'Retrying...';
                 renderAggregates();
+                // Re-enable button after a delay
+                setTimeout(() => {
+                    e.target.disabled = false;
+                    e.target.textContent = 'Retry Analysis';
+                }, 2000);
+                break;
+            case 'restart':
+                console.log('🔄 Restarting workflow...');
+                // Disable the button to prevent multiple clicks
+                e.target.disabled = true;
+                e.target.textContent = 'Restarting...';
+                renderAggregates();
+                // Re-enable button after a delay
+                setTimeout(() => {
+                    e.target.disabled = false;
+                    e.target.textContent = 'Restart Analysis';
+                }, 2000);
                 break;
             case 'reset-restart':
                 WorkflowManager.reset();
@@ -3898,6 +3941,7 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     });
 
     if (explanation) {
+        console.log(`📄 Using existing explanation for card: ${canonicalKey}`);
         const { contentEl, regenerateBtn } = renderExplanationCard(card, `AI Explanation for ${title}`, marked.parse(explanation));
         regenerateBtn.onclick = () => {
             contentEl.innerHTML = '<p>Generating explanation...</p>';
@@ -3906,8 +3950,11 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
         };
     } else if (!skipExplanation) {
         // Don't generate explanation here, instead return the task to be queued
+        console.log(`📝 Creating explanation task for card: ${canonicalKey}`);
         const explanationTask = { agg: initialAgg, job, card };
         return { card, initialAgg, job, explanationTask };
+    } else {
+        console.log(`⏭️ Skipping explanation for card: ${canonicalKey} (skipExplanation: ${skipExplanation})`);
     }
  
     return { card, initialAgg, job };
@@ -4002,7 +4049,11 @@ async function runAiWorkflow(includedRows, excludedDimensions = []) {
             const dynamicPlan = await getAiAnalysisPlan(context);
             AITasks.loadPlan(WorkflowManager.getCurrentAgentId(), dynamicPlan.tasks);
             
-            plan = { jobs: dynamicPlan.jobs, charts: [] }; // Assuming getAiAnalysisPlan also returns jobs
+            plan = {
+                jobs: dynamicPlan.jobs,
+                charts: [],
+                planType: dynamicPlan.planType
+            }; // Include planType for proper workflow handling
             
             // Don't complete analysis task yet - wait until after cards are built
         }
@@ -4113,6 +4164,36 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
 
                 await processJobsIncrementally();
 
+                // Process explanation queue BEFORE completing analysis tasks
+                if (explanationQueue.length > 0) {
+                    console.log(`⏳ Starting sequential generation of ${explanationQueue.length} explanation(s)...`);
+                    for (let i = 0; i < explanationQueue.length; i++) {
+                        const task = explanationQueue[i];
+                        WorkflowManager.updateCurrentTaskMessage(`Generating explanation ${i + 1} of ${explanationQueue.length}...`);
+                        await generateExplanation(task.agg, task.job, task.card);
+                        console.log(`✅ Explanation ${i + 1} completed.`);
+                        console.log(`🔄 Triggering auto-save after explanation ${i + 1}...`);
+                        debouncedAutoSave();
+                    }
+                    console.log('✅ All explanations completed sequentially.');
+                } else {
+                    console.log('ℹ️ No explanations to generate');
+                }
+                
+                // Mark rendering as complete now that explanations are done
+                console.log('🏁 All work including explanations completed, releasing render lock');
+                isRenderingAggregates = false;
+                
+                // Process any pending renders
+                if (pendingRender) {
+                    const wasPending = pendingRender;
+                    pendingRender = false;
+                    console.log('🔁 Running queued renderAggregates after explanations');
+                    setTimeout(() => {
+                        try { renderAggregates(null, [], 0, true); } catch (e) { console.error(e); }
+                    }, 100);
+                }
+
                 // Complete analysis task now that we're ready to build cards
                 if (plan.planType === 'auto-analysis') {
                    WorkflowManager.completeTask('auto-analysis', 'AI analysis plan created. Building cards...');
@@ -4121,24 +4202,15 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 }
                 
                 if (WorkflowManager.getState().status === 'running') {
-                    WorkflowManager.completeTask('rendering');
-                    await new Promise(resolve => setTimeout(resolve, 50));
-                    
-                    // Process the explanation queue sequentially
-                    if (explanationQueue.length > 0) {
-                        console.log(`⏳ Starting sequential generation of ${explanationQueue.length} explanation(s)...`);
-                        for (let i = 0; i < explanationQueue.length; i++) {
-                            const task = explanationQueue[i];
-                            WorkflowManager.updateCurrentTaskMessage(`Generating explanation ${i + 1} of ${explanationQueue.length}...`);
-                            await generateExplanation(task.agg, task.job, task.card);
-                            console.log(`✅ Explanation ${i + 1} completed.`);
-                            console.log(`🔄 Triggering auto-save after explanation ${i + 1}...`);
-                            debouncedAutoSave();
-                        }
-                        console.log('✅ All explanations completed sequentially.');
+                    // Complete rendering task only if it exists (not in ERP workflow)
+                    console.log(`🔍 Checking rendering task completion: planType = ${plan.planType}`);
+                    if (plan.planType !== 'erp-analysis') {
+                        console.log('📝 Completing rendering task (non-ERP workflow)');
+                        WorkflowManager.completeTask('rendering');
                     } else {
-                        console.log('ℹ️ No explanations to generate');
+                        console.log('⏭️ Skipping rendering task (ERP workflow)');
                     }
+                    await new Promise(resolve => setTimeout(resolve, 50));
                     
                     WorkflowManager.completeTask('ai-explanation');
                     await new Promise(resolve => setTimeout(resolve, 50));
@@ -4199,6 +4271,33 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     
                     // Auto-save after fallback card generation
                     debouncedAutoSave();
+                    
+                    // Release render lock for fallback path
+                    console.log('🏁 Fallback plan completed, releasing render lock');
+                    isRenderingAggregates = false;
+                    
+                    // Process any pending renders
+                    if (pendingRender) {
+                        const wasPending = pendingRender;
+                        pendingRender = false;
+                        console.log('🔁 Running queued renderAggregates after fallback');
+                        setTimeout(() => {
+                            try { renderAggregates(null, [], 0, true); } catch (e) { console.error(e); }
+                        }, 100);
+                    }
+                } else {
+                    // No fallback plan available
+                    console.log('🏁 No fallback plan available, releasing render lock');
+                    isRenderingAggregates = false;
+                    
+                    if (pendingRender) {
+                        const wasPending = pendingRender;
+                        pendingRender = false;
+                        console.log('🔁 Running queued renderAggregates after no-plan scenario');
+                        setTimeout(() => {
+                            try { renderAggregates(null, [], 0, true); } catch (e) { console.error(e); }
+                        }, 100);
+                    }
                 }
             }
         }
@@ -4222,16 +4321,9 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         }, 400);
         
     } finally {
-        isRenderingAggregates = false;
-        console.log('✅ renderAggregates completed');
-        if (pendingRender) {
-            const wasPending = pendingRender;
-            pendingRender = false;
-            console.log('🔁 Running queued renderAggregates');
-            setTimeout(() => {
-                try { renderAggregates(null, [], 0, true); } catch (e) { console.error(e); }
-            }, 0);
-        }
+        // Don't reset isRenderingAggregates here if explanations are still running
+        // The flag will be reset after explanations complete (see explanation completion logic above)
+        console.log('✅ renderAggregates main phase completed, keeping render lock for explanations');
     }
 }
 

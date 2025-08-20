@@ -43,19 +43,31 @@ export async function fetchWithRetry(apiKey, model, prompt, showToast) {
 
       if (response.status === 429 || response.status === 503) {
         if (attempt <= MAX_RETRIES) {
-          const delay = Math.min(BASE_RETRY_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt - 1), MAX_RETRY_DELAY);
+          // Different delay strategies based on error type
+          let delay;
+          if (response.status === 429) {
+            // Rate limiting: use exponential backoff with longer delays
+            delay = Math.min(BASE_RETRY_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt), MAX_RETRY_DELAY);
+          } else {
+            // Service overloaded: shorter delays for faster recovery
+            delay = Math.min(BASE_RETRY_DELAY * Math.pow(1.5, attempt - 1), MAX_RETRY_DELAY / 2);
+          }
+          
           const jitter = Math.random() * 0.1 * delay;
           const totalDelay = delay + jitter;
           
-          const statusText = response.status === 429 ? 'Rate limit' : 'Service overloaded';
-          console.warn(`${statusText}. Retrying in ${Math.round(totalDelay)}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
+          const statusText = response.status === 429 ? 'Rate limit exceeded' : 'Service temporarily overloaded';
+          const retryReason = response.status === 429 ? 'quota limits' : 'high server load';
+          
+          console.warn(`${statusText} (${retryReason}). Retrying in ${Math.round(totalDelay)}ms... (Attempt ${attempt}/${MAX_RETRIES})`);
           showToast(`${statusText}. Retrying in ${Math.round(totalDelay / 1000)} seconds...`, 'info', totalDelay);
           
           await new Promise(resolve => setTimeout(resolve, totalDelay));
-          continue; // Continue to the next iteration to retry
+          continue;
         } else {
           const statusText = response.status === 429 ? 'rate limiting' : 'service unavailability';
-          throw new Error(`The request failed after ${MAX_RETRIES} retries due to ${statusText}.`);
+          const errorCode = `HTTP ${response.status}`;
+          throw new Error(`API request failed after ${MAX_RETRIES} retries due to ${statusText} (${errorCode}). Please try again later.`);
         }
       }
 
@@ -64,18 +76,38 @@ export async function fetchWithRetry(apiKey, model, prompt, showToast) {
       throw new Error(errorData.error.message);
 
     } catch (error) {
+      // Categorize errors for different retry strategies
+      const isNetworkError = error.name === 'TypeError' || error.message.includes('fetch');
+      const isTimeoutError = error.message.includes('timeout') || error.code === 'ECONNRESET';
+      
       if (attempt <= MAX_RETRIES) {
-        const delay = Math.min(BASE_RETRY_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt - 1), MAX_RETRY_DELAY);
+        let delay;
+        if (isTimeoutError) {
+          // Timeout errors: use shorter delays
+          delay = Math.min(BASE_RETRY_DELAY * Math.pow(1.3, attempt - 1), MAX_RETRY_DELAY / 3);
+        } else if (isNetworkError) {
+          // Network errors: use moderate delays
+          delay = Math.min(BASE_RETRY_DELAY * Math.pow(1.7, attempt - 1), MAX_RETRY_DELAY / 2);
+        } else {
+          // Other errors: use full exponential backoff
+          delay = Math.min(BASE_RETRY_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt - 1), MAX_RETRY_DELAY);
+        }
+        
         const jitter = Math.random() * 0.1 * delay;
         const totalDelay = delay + jitter;
         
-        console.warn(`Request failed. Retrying in ${Math.round(totalDelay)}ms... (Attempt ${attempt}/${MAX_RETRIES}) Error: ${error.message}`);
-        showToast(`Request failed. Retrying in ${Math.round(totalDelay / 1000)} seconds...`, 'info', totalDelay);
+        const errorType = isTimeoutError ? 'Timeout' : isNetworkError ? 'Network' : 'Request';
+        console.warn(`${errorType} error occurred. Retrying in ${Math.round(totalDelay)}ms... (Attempt ${attempt}/${MAX_RETRIES}) Error: ${error.message}`);
+        showToast(`${errorType} error. Retrying in ${Math.round(totalDelay / 1000)} seconds...`, 'info', totalDelay);
         await new Promise(resolve => setTimeout(resolve, totalDelay));
       } else {
-        throw error; // Rethrow the last error after all retries have failed
+        // Enhanced error context for final failure
+        const enhancedError = new Error(`API request failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`);
+        enhancedError.originalError = error;
+        enhancedError.attemptCount = attempt;
+        throw enhancedError;
       }
     }
   }
-  throw new Error('The request failed after all retry attempts.');
+  throw new Error(`API request failed after ${MAX_RETRIES} retry attempts. Please check your connection and try again.`);
 }
