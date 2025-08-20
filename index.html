@@ -1194,6 +1194,16 @@ const debouncedAutoSave = debounce(() => {
     console.log(`❌ Auto-save skipped: missing currentHistoryId=${!!window.currentHistoryId} or ROWS=${!!ROWS}`);
     return;
   }
+  
+  // Don't auto-save if workflow is still running to prevent loops
+  if (typeof WorkflowManager !== 'undefined') {
+    const workflowState = WorkflowManager.getState();
+    if (workflowState.status === 'running') {
+      console.log('⏸️ Auto-save paused: workflow still running');
+      return;
+    }
+  }
+  
   const currentName = $('#history-list .history-item[data-id="' + window.currentHistoryId + '"] .name')?.textContent || 'current report';
   console.log(`💾 Auto-saving changes to "${currentName}"...`);
   saveCurrentStateToHistory(currentName, false); // false = update existing
@@ -3362,7 +3372,7 @@ $('#loadBtn').onclick = async ()=>{
     const choice=$('#delimiter').value, header=$('#hasHeader').checked;
     const {data, meta}=await parseCSV(f, choice, header);
     if(!data.length) throw new Error('No rows detected (check delimiter/header).');
-    ROWS=data; DATA_COLUMNS = Object.keys(ROWS[0] || {});
+    ROWS=data; window.currentData = data; DATA_COLUMNS = Object.keys(ROWS[0] || {});
     const dateFormat = $('#dateFormat').value;
     PROFILE=profile(ROWS, dateFormat); renderProfile(PROFILE, LAST_PARSE_META);
 
@@ -3411,6 +3421,22 @@ $('#loadBtn').onclick = async ()=>{
     if ($('#mode').value === 'auto') {
       console.log('🎯 Auto-rendering aggregates after manual CSV load...');
       renderAggregates();
+
+      // Ensure AI Analysis Chat is initialized after aggregates render
+      setTimeout(() => {
+        try {
+          if (typeof window.initializeChat === 'function') {
+            if (!window.currentData || window.currentData.length === 0) {
+              window.currentData = ROWS;
+            }
+            const chatSection = document.getElementById('ai-analysis-section');
+            if (chatSection) chatSection.style.display = 'block';
+            window.initializeChat();
+          }
+        } catch (e) {
+          console.warn('AI Analysis Chat init after manual load failed:', e);
+        }
+      }, 400);
     }
 
   }catch(e){ console.error(e); showToast('Parse error: '+(e?.message||e), 'error'); $('#meta').textContent='Parse failed.'; }
@@ -4002,6 +4028,10 @@ let pendingRender = false;
 
 async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], fallbackDepth = 0, retry = false) {
     if (!ROWS) return showToast('Load a CSV first.', 'error');
+    // Ensure AI Chat has access to the latest dataset
+    if (!window.currentData || window.currentData.length === 0) {
+        window.currentData = ROWS;
+    }
 
     // Prevent concurrent executions
     if (isRenderingAggregates && !retry) {
@@ -4099,6 +4129,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 
                 // Complete analysis task now that we're ready to build cards
                 WorkflowManager.completeTask('auto-analysis', 'AI analysis plan created. Building cards...');
+                WorkflowManager.completeTask('erp-analysis', 'ERP analysis completed. Building cards...');
                 
                 if (WorkflowManager.getState().status === 'running') {
                     WorkflowManager.completeTask('rendering');
@@ -4201,6 +4232,21 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         
         // After all cards are rendered (either from snapshot or new plan), generate the summary
         checkAndGenerateAISummary();
+
+        // Initialize AI Analysis Chat after aggregates are ready
+        setTimeout(() => {
+            try {
+                if (typeof window.initializeChat === 'function' && window.currentData && window.currentData.length > 0) {
+                    const chatSection = document.getElementById('ai-analysis-section');
+                    if (chatSection) {
+                        chatSection.style.display = 'block';
+                    }
+                    window.initializeChat();
+                }
+            } catch (e) {
+                console.warn('AI Analysis Chat initialization failed:', e);
+            }
+        }, 400);
         
     } finally {
         isRenderingAggregates = false;
@@ -5287,7 +5333,7 @@ window.addEventListener('message', async (event) => {
         
         // Set global variables same as loadBtn onclick
         console.log('🔧 Setting global variables...');
-        ROWS = data; 
+        ROWS = data; window.currentData = data;
         DATA_COLUMNS = Object.keys(ROWS[0] || {});
         
         console.log('📊 DATA_COLUMNS:', DATA_COLUMNS);
@@ -5351,6 +5397,22 @@ window.addEventListener('message', async (event) => {
         if ($('#mode').value === 'auto') {
           console.log('🎯 Auto-rendering aggregates...');
           renderAggregates();
+
+          // Ensure AI Analysis Chat is initialized after aggregates render
+          setTimeout(() => {
+            try {
+              if (typeof window.initializeChat === 'function') {
+                if (!window.currentData || window.currentData.length === 0) {
+                  window.currentData = ROWS;
+                }
+                const chatSection = document.getElementById('ai-analysis-section');
+                if (chatSection) chatSection.style.display = 'block';
+                window.initializeChat();
+              }
+            } catch (e) {
+              console.warn('AI Analysis Chat init after table_csv processing failed:', e);
+            }
+          }, 400);
         }
         
         console.log('🎉 Successfully processed table data');
