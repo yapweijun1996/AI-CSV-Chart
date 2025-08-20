@@ -105,21 +105,31 @@ export function getErpAnalysisPriority(columns) {
                 return result;
             },
             getData: () => {
+                // Helpers: prefer explicit total columns in this order
+                const findColByPriority = (priorityKwList) => {
+                    for (const kw of priorityKwList) {
+                        const col = columns.find(c => c.toLowerCase().includes(kw));
+                        if (col) return col;
+                    }
+                    return null;
+                };
+
                 const qtyCol = findCol(['qty', 'quantity']);
                 const priceCol = findCol(['price', 'cost']);
-                const totalCol = findCol(['revenue', 'total', 'amount']);
+                // Prefer 'Total Amount' > 'Amount' > 'Total' > 'Revenue'
+                const totalCol = findColByPriority(['total amount', 'amount', 'total', 'revenue']);
                 
                 let metrics = [];
-                // Smart metric selection: Prioritize total revenue/cost if possible
-                if (qtyCol && priceCol) {
+                // Smart metric selection: Prioritize provided total columns if present; otherwise fall back to derived
+                if (totalCol) {
+                    metrics.push({ name: totalCol, type: 'direct' });
+                } else if (qtyCol && priceCol) {
                     metrics.push({
                         name: `Total Revenue/Cost`,
                         type: 'derived',
                         expression: `${priceCol} * ${qtyCol}`,
-                        baseMetric: priceCol // For aggregation, we sum the price col, then multiply by qty later if needed
+                        baseMetric: priceCol
                     });
-                } else if (totalCol) {
-                    metrics.push({ name: totalCol, type: 'direct' });
                 }
                 
                 if (qtyCol) metrics.push({ name: qtyCol, type: 'direct' });
