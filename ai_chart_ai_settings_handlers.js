@@ -14,7 +14,7 @@ export function openAiSettings() {
   
   // Load saved API key, model, and language
   const savedKey = localStorage.getItem('gemini_api_key');
-  const savedModel = localStorage.getItem('gemini_model') || 'gemini-1.5-flash';
+  const savedModel = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
   const savedLanguage = localStorage.getItem('ai_language') || 'English';
   
   if (savedKey) {
@@ -25,6 +25,13 @@ export function openAiSettings() {
   
   // Hide test result
   testResult.style.display = 'none';
+
+// Load saved Default Generate Mode
+const defaultModeSelect = document.getElementById('defaultModeSelect');
+if (defaultModeSelect) {
+  const savedDefaultMode = localStorage.getItem('default_generate_mode') || 'auto';
+  defaultModeSelect.value = savedDefaultMode;
+}
   
   modal.classList.add('open');
   modal.focus();
@@ -91,22 +98,38 @@ export function initializeAiSettingsHandlers(dependencies) {
         const apiKey = $('#apiKeyInput').value.trim();
         const model = $('#modelSelect').value;
         const language = $('#languageSelect').value;
+        const defaultModeSelect = document.getElementById('defaultModeSelect');
+        const defaultMode = defaultModeSelect ? defaultModeSelect.value : 'auto';
 
         localStorage.setItem('gemini_api_key', apiKey);
         localStorage.setItem('gemini_model', model);
         localStorage.setItem('ai_language', language);
+        localStorage.setItem('default_generate_mode', defaultMode);
+
         showToast('AI settings saved successfully!', 'success');
         $('#aiSettingsModal').classList.remove('open');
+
+        // Notify listeners that settings changed (e.g., summary/logic can react)
+        try { window.dispatchEvent(new StorageEvent('storage', { key: 'default_generate_mode', newValue: defaultMode })); } catch(e) {}
     };
 
     $('#clearApiKeyBtn').onclick = () => {
         localStorage.removeItem('gemini_api_key');
         localStorage.removeItem('gemini_model');
         localStorage.removeItem('ai_language');
+        localStorage.removeItem('default_generate_mode');
+
         $('#apiKeyInput').value = '';
-        $('#modelSelect').value = 'gemini-1.5-flash';
+        $('#modelSelect').value = 'gemini-2.5-flash';
         $('#languageSelect').value = 'English';
+
+        const defaultModeSelect = document.getElementById('defaultModeSelect');
+        if (defaultModeSelect) defaultModeSelect.value = 'auto';
+
         $('#testResult').style.display = 'none';
         showToast('AI settings cleared.', 'success');
+
+        // Notify listeners that default mode preference was cleared
+        try { window.dispatchEvent(new StorageEvent('storage', { key: 'default_generate_mode', newValue: null })); } catch(e) {}
     };
 }

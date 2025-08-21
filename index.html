@@ -476,6 +476,18 @@
           <option value="Hebrew">Hebrew</option>
         </select>
       </div>
+<div style="margin-bottom: 16px;">
+        <label for="defaultModeSelect" style="display: block; margin-bottom: 8px; font-weight: 500;">
+          Default Generate Mode:
+        </label>
+        <select id="defaultModeSelect" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: white;">
+          <option value="auto">Auto (Quick Analysis)</option>
+          <option value="ai_agent">AI Agent (Intelligent Analysis)</option>
+        </select>
+        <small style="color: var(--muted); display: block; margin-top: 4px;">
+          Choose which mode to use when loading CSV files
+        </small>
+      </div>
       
       <div style="margin-bottom: 16px;">
         <button
@@ -513,6 +525,15 @@ import { applyMasonryLayout } from './ai_chart_masonry.js';
 import { getMetricPriority, selectBestMetricColumn, pickPrimaryMetric, buildErpPlan } from './ai_chart_erp_metrics.js';
 import { inferType, profile, renderProfile, inferRole, detectTemporalPatterns, detectHierarchicalRelationships } from './ai_chart_profile.js';
 import { parseCsvNumber, isNum, toNum, parseDateSafe } from './ai_chart_utils.js';
+// Smart default mode selector
+function getDefaultMode() {
+  const hasApiKey = !!localStorage.getItem('gemini_api_key');
+  const userPreference = localStorage.getItem('default_generate_mode');
+  if (hasApiKey && userPreference === 'ai_agent') {
+    return 'ai_agent';
+  }
+  return 'auto';
+}
 import { showToast } from './ai_chart_toast_system.js';
 import { AITaskManager, createWorkflowManager } from './ai_chart_task_manager.js';
 /* ========= utils ========= */
@@ -3651,7 +3672,9 @@ $('#loadBtn').onclick = async ()=>{
     RPP = Number($('#rowsPerPage').value)||25; PAGE=1;
     applyFilter(); renderRawBody();
     MANUAL_ROLES = {}; MANUAL_JOBS = [];
-    $('#mode').value='auto'; switchMode('auto');
+    const smart = getDefaultMode();
+    $('#mode').value = smart;
+    switchMode(smart);
     loadState(); // restore per-header state if available
     WorkflowManager.reset(MODE); // Reset AI todo list on new load
     showToast('CSV data loaded successfully.', 'success');
@@ -6093,8 +6116,9 @@ window.addEventListener('message', async (event) => {
         // Reset manual overrides (same as loadBtn)
         MANUAL_ROLES = {}; 
         MANUAL_JOBS = [];
-        $('#mode').value = 'auto';
-        switchMode('auto');
+        const smart = getDefaultMode();
+        $('#mode').value = smart;
+        switchMode(smart);
         WorkflowManager.reset(MODE); // Clear AI todo list on new load
         
         // Enable other buttons
