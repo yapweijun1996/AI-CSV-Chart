@@ -821,7 +821,7 @@ if (!document.querySelector('#ai-workflow-enhanced-styles')) {
     const link = document.createElement('link');
     link.id = 'ai-workflow-enhanced-styles';
     link.rel = 'stylesheet';
-    link.href = 'ai_chart_workflow.css';
+    link.href = new URL('./ai_chart_workflow.css', import.meta.url).href;
     document.head.appendChild(link);
 }
 
@@ -1166,7 +1166,7 @@ async function parseCSV(file, delimiterChoice, header=true){
 
     try {
       // Prefer self-hosted worker to avoid cross-origin worker issues
-      const worker = new Worker('ai_chart_parser_worker.js');
+      const worker = new Worker(new URL('./ai_chart_parser_worker.js', import.meta.url));
       isUsingWorker = true;
       const workerTimeout = setTimeout(()=>{
         console.error('Worker timeout - switching to non-worker fallback');
@@ -3406,7 +3406,7 @@ async function workerAggregateWithFallback(rows, profile, plan, timeoutMs = 1500
 
   let w;
   try {
-    w = new Worker('ai_chart_parser_worker.js');
+    w = new Worker(new URL('./ai_chart_parser_worker.js', import.meta.url));
   } catch (e) {
     console.warn('Worker creation failed:', e);
     showToast('Could not start worker, falling back to main thread.', 'info');
