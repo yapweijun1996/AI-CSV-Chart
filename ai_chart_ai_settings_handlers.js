@@ -10,11 +10,48 @@ export function updateAIFeaturesVisibility() {
     const aiWorkflowSection = document.getElementById('ai-todo-list-section');
     const aiAnalysisSection = document.getElementById('ai-analysis-section');
 
+    // Toggle AI workflow and analysis sections
     if (aiWorkflowSection) {
         aiWorkflowSection.style.display = apiKey ? 'block' : 'none';
     }
     if (aiAnalysisSection) {
         aiAnalysisSection.style.display = apiKey ? 'block' : 'none';
+    }
+
+    // Toggle "AI Agent" option in main Mode selector
+    const modeSelect = document.getElementById('mode');
+    let aiAgentOption = null;
+    if (modeSelect) {
+        aiAgentOption = modeSelect.querySelector('option[value="ai_agent"]');
+    }
+    if (aiAgentOption) {
+        aiAgentOption.style.display = apiKey ? '' : 'none';
+        // If currently selected but no key, fallback to Auto and trigger change
+        if (!apiKey && modeSelect && modeSelect.value === 'ai_agent') {
+            modeSelect.value = 'auto';
+            try {
+                modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            } catch {}
+        }
+    }
+
+    // Toggle "AI Agent" option in Default Generate Mode selector (AI Settings)
+    const defaultModeSelect = document.getElementById('defaultModeSelect');
+    let defaultAiOption = null;
+    if (defaultModeSelect) {
+        defaultAiOption = defaultModeSelect.querySelector('option[value="ai_agent"]');
+    }
+    if (defaultAiOption) {
+        defaultAiOption.style.display = apiKey ? '' : 'none';
+        // If preference was ai_agent but key is missing, reset preference to auto
+        if (!apiKey) {
+            try {
+                if (localStorage.getItem('default_generate_mode') === 'ai_agent') {
+                    localStorage.setItem('default_generate_mode', 'auto');
+                }
+            } catch {}
+            defaultModeSelect.value = 'auto';
+        }
     }
 }
 

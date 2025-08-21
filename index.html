@@ -3609,29 +3609,100 @@ function openAddAgg(){
   const modal = $('#aggModal');
   const gb = $('#aggGroupBy'), mt = $('#aggMetric');
   const bucket = $('#aggBucket'); gb.innerHTML=''; mt.innerHTML=''; bucket.value='';
-  const dims = MODE==='manual'
-    ? PROFILE.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='dimension' || (MANUAL_ROLES[c.name]||'')==='date')
-    : PROFILE.columns.filter(c => ['string','date'].includes(c.type));
-  const nums = MODE==='manual'
-    ? PROFILE.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='metric')
-    : PROFILE.columns.filter(c => c.type==='number');
+
+  // Build candidate lists. In Manual mode prefer MANUAL_ROLES, but fall back to inferred types if empty.
+  let dims = [];
+  let nums = [];
+
+  if (MODE === 'manual') {
+    const dimsByRoles = PROFILE.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='dimension' || (MANUAL_ROLES[c.name]||'')==='date');
+    const numsByRoles = PROFILE.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='metric');
+    const inferredDims = PROFILE.columns.filter(c => ['string','date'].includes(c.type));
+    const inferredNums = PROFILE.columns.filter(c => c.type==='number');
+
+    dims = dimsByRoles.length ? dimsByRoles : inferredDims;
+    nums = numsByRoles.length ? numsByRoles : inferredNums;
+  } else {
+    dims = PROFILE.columns.filter(c => ['string','date'].includes(c.type));
+    nums = PROFILE.columns.filter(c => c.type==='number');
+  }
+
+  // Populate selects
   dims.forEach(c=>{ const o=document.createElement('option'); o.value=c.name; o.textContent=c.name; gb.appendChild(o); });
   nums.forEach(c=>{ const o=document.createElement('option'); o.value=c.name; o.textContent=c.name; mt.appendChild(o); });
+
+  // Enable/disable bucket based on selected groupBy type
+  const setBucketAvailability = () => {
+    const selectedGb = gb.value;
+    const col = PROFILE.columns.find(c => c.name === selectedGb);
+    if (col && col.type === 'date') {
+      bucket.disabled = false;
+    } else {
+      bucket.disabled = true;
+      bucket.value = '';
+    }
+  };
+  setBucketAvailability();
+  gb.addEventListener('change', setBucketAvailability);
+
   modal.classList.add('open');
 }
 $('#closeAggModal').onclick = ()=> $('#aggModal').classList.remove('open');
 $('#addAggConfirm').onclick = ()=>{
   const groupBy = $('#aggGroupBy').value;
-  const metric  = $('#aggMetric').value || null;
+  const metricRaw  = $('#aggMetric').value;
   const agg     = $('#aggFunc').value;
   const chart   = $('#aggChart').value;
   const topN    = Math.max(3, Math.min(999, Number($('#aggTopN').value)||20));
   const dateBucket = $('#aggBucket').value || '';
+
+  if (!groupBy) {
+    showToast('Please select a "Group by" column.', 'error');
+    return;
+  }
+
+  // Normalize metric: allow null only for count
+  let metric = (metricRaw && metricRaw.trim()) ? metricRaw : null;
+
+  if (agg !== 'count' && !metric) {
+    showToast('Please select a Metric for this aggregation function.', 'error');
+    return;
+  }
+
+  // For count with empty metric, explicitly set null
+  if (agg === 'count' && !metric) {
+    metric = null;
+  }
+
   MANUAL_JOBS.push({ groupBy, metric, agg, chart, topN, dateBucket });
   $('#aggModal').classList.remove('open');
-  renderAggregates();
-  showToast('New aggregate added.', 'success');
-  debouncedAutoSave();
+
+  // If in Manual mode, build and append just this card immediately without restarting the workflow
+  if (MODE === 'manual') {
+    const grid = $('#results');
+    if (grid) {
+      (async () => {
+        try {
+          const { card } = await buildAggCard(
+            { groupBy, metric, agg, dateBucket },
+            { charts: [{ type: chart, topN }] }
+          );
+          grid.appendChild(card);
+          applyMasonryLayout();
+          showToast('New aggregate added.', 'success');
+          debouncedAutoSave();
+        } catch (e) {
+          console.error('Failed to build manual aggregate card:', e);
+          showToast('Failed to add aggregate: ' + (e?.message || e), 'error');
+        }
+      })();
+    }
+  } else {
+    // For non-manual modes, force a render even if a workflow is running
+    renderAggregates(null, [], 0, true);
+    showToast('New aggregate added.', 'success');
+    debouncedAutoSave();
+  }
 };
 
 /* ========= UI glue ========= */
@@ -4734,8 +4805,8 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         window.currentData = ROWS;
     }
 
-    // Enhanced concurrent execution prevention
-    if (isRenderingAggregates && !retry) {
+     // Enhanced concurrent execution prevention
+    if (isRenderingAggregates && !retry && MODE !== 'manual') {
         console.log('⏸️ renderAggregates already running, queueing next run');
         pendingRender = true;
         return;
@@ -4743,7 +4814,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
     
     // Check WorkflowManager state for additional protection
     const workflowState = WorkflowManager.getState();
-    if (workflowState.status === 'running' && !retry) {
+    if (workflowState.status === 'running' && !retry && MODE !== 'manual') {
         console.log('⏸️ WorkflowManager indicates workflow is running, skipping new execution');
         showToast('Workflow is already running. Please wait for completion.', 'warning');
         return;
