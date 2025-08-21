@@ -1698,7 +1698,7 @@ async function parseCSV(file, delimiterChoice, header=true){
 
     try {
       // Prefer self-hosted worker to avoid cross-origin worker issues
-      const worker = new Worker('parser.worker.js');
+      const worker = new Worker('ai_chart_parser_worker.js');
       isUsingWorker = true;
       const workerTimeout = setTimeout(()=>{
         console.error('Worker timeout - switching to non-worker fallback');
@@ -3927,7 +3927,7 @@ async function workerAggregateWithFallback(rows, profile, plan, timeoutMs = 1500
 
   let w;
   try {
-    w = new Worker('parser.worker.js');
+    w = new Worker('ai_chart_parser_worker.js');
   } catch (e) {
     console.warn('Worker creation failed:', e);
     showToast('Could not start worker, falling back to main thread.', 'info');
