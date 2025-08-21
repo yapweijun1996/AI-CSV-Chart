@@ -630,7 +630,7 @@ editPanel.style.padding = '8px';
 editPanel.style.marginTop = '8px';
 
 // Build simple controls using `profile` passed in options
-const parentCard = c.closest('.card');
+let parentCard = c.closest('.card');
 const currentGroupBy = parentCard?.dataset?.groupBy || agg.header?.[0] || '';
 const currentMetricName = parentCard?.dataset?.metric || '';
 const currentAggName = parentCard?.dataset?.agg || (currentMetricName ? 'sum' : 'count');
@@ -649,6 +649,13 @@ const fnOptions = ['sum', 'avg', 'min', 'max', 'count']
   .map(fn => `<option value="${fn}" ${fn === currentAggName ? 'selected' : ''}>${fn[0].toUpperCase()}${fn.slice(1)}</option>`)
   .join('');
 
+const currentDateBucket = parentCard?.dataset?.dateBucket || '';
+const bucketOptions = ['','year','quarter','month','week','day']
+  .map(b => b
+    ? `<option value="${b}" ${b === currentDateBucket ? 'selected' : ''}>${b[0].toUpperCase()}${b.slice(1)}</option>`
+    : `<option value="" ${currentDateBucket === '' ? 'selected' : ''}>None</option>`
+  ).join('');
+
 editPanel.innerHTML = `
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
     <label>Group by:
@@ -659,6 +666,9 @@ editPanel.innerHTML = `
     </label>
     <label>Function:
       <select id="edit-function">${fnOptions}</select>
+    </label>
+    <label id="edit-bucket-wrap">Date bucket:
+      <select id="edit-bucket">${bucketOptions}</select>
     </label>
     <div style="display:flex;gap:6px;">
       <button id="edit-apply" style="background:#2563eb;color:#fff;border:none;padding:6px 10px;border-radius:4px;">Apply</button>
@@ -672,6 +682,24 @@ editBtn.onclick = () => {
   if (editPanel.style.display === 'none') {
     editPanel.style.display = 'block';
     editBtn.textContent = 'Cancel Edit';
+
+    // Sync Date Bucket visibility when opening
+    const gbSel = editPanel.querySelector('#edit-groupby');
+    const bucketWrap = editPanel.querySelector('#edit-bucket-wrap');
+    const bucketSel = editPanel.querySelector('#edit-bucket');
+
+    const syncBucketVisibility = () => {
+      const col = (profile?.columns || []).find(x => x.name === gbSel.value);
+      const isDate = col?.type === 'date';
+      if (bucketWrap) bucketWrap.style.display = isDate ? '' : 'none';
+      if (!isDate && bucketSel) bucketSel.value = '';
+    };
+
+    if (gbSel && !gbSel._bucketSyncAttached) {
+      gbSel.addEventListener('change', syncBucketVisibility);
+      gbSel._bucketSyncAttached = true;
+    }
+    syncBucketVisibility();
   } else {
     editPanel.style.display = 'none';
     editBtn.textContent = 'Edit';
@@ -697,10 +725,14 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
     : (Array.isArray(window.ROWS) ? window.ROWS : []);
 
   // Parent card controls (filter/minGroupShare and showMissing)
-  const currentFilterValue = Number(parentCard?.querySelector('.filter-input')?.value || 0);
-  const currentFilterMode = parentCard?.querySelector('.filter-mode-select')?.value || 'share';
-  const showMissingFlag = parentCard?.dataset?.showMissing === 'true';
-  const currentDateBucket = parentCard?.dataset?.dateBucket || '';
+  const parentCardNow = c.closest('.card') || parentCard;
+  const currentFilterValue = Number(parentCardNow?.querySelector('.filter-input')?.value || 0);
+  const currentFilterMode = parentCardNow?.querySelector('.filter-mode-select')?.value || 'share';
+  const showMissingFlag = parentCardNow?.dataset?.showMissing === 'true';
+
+  // Determine date bucket based on selected group type
+  const selCol = (profile?.columns || []).find(x => x.name === newGroupBy);
+  const selectedBucket = (selCol?.type === 'date') ? (editPanel.querySelector('#edit-bucket')?.value || '') : '';
 
   // Recompute aggregate
   const newAgg = groupAgg(
@@ -708,7 +740,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
     newGroupBy,
     newMetric,
     newFunction,
-    currentDateBucket, // date bucket from card dataset if any
+    selectedBucket,
     { mode: currentFilterMode, value: currentFilterValue },
     !!showMissingFlag,
     profile
@@ -720,10 +752,12 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   left.textContent = `Chart for: ${newAgg.header[1]} by ${newAgg.header[0]}`;
 
   // Persist new settings on the parent card dataset for downstream features/snapshots
-  if (parentCard) {
+  if (parentCardNow) {
+    parentCard = parentCardNow;
     parentCard.dataset.groupBy = newGroupBy || '';
     parentCard.dataset.metric = newMetric || '';
     parentCard.dataset.agg = newFunction || '';
+    parentCard.dataset.dateBucket = selectedBucket || '';
   }
 
   // Re-render table and charts in this card (same approach used elsewhere)
@@ -763,6 +797,8 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   box.appendChild(canvas);
   c.appendChild(box);
   chartsContainer.appendChild(c);
+  // Parent card reference becomes available after append
+  parentCard = c.closest('.card');
   
   // Auto redraw + auto-save on control changes
   typeSel.addEventListener('change', () => { draw(); if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave(); });
