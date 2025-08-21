@@ -21,6 +21,13 @@ export class AITaskManager {
                 type: task.type || 'general'
             }));
             this.currentPlan = agent.todos;
+            
+            // If agent was empty and now has tasks, ensure it's in running state
+            if (agent.todos.length > 0 && agent.status !== 'running') {
+                agent.status = 'running';
+                console.log(`🔄 AITasks.loadPlan: Agent ${agentId} now has ${agent.todos.length} tasks, setting to running state`);
+            }
+            
             this.notify();
         }
     }
@@ -168,6 +175,37 @@ export class AITaskManager {
         this.notify();
     }
 
+    // Complete a task by description (for AI Agent workflow integration)
+    completeTaskByDescription(agentId, description, message = null) {
+        const agent = this.agentTasks.get(agentId);
+        if (!agent) {
+            console.warn(`⚠️ TaskManager.completeTaskByDescription: Agent ${agentId} not found (likely reset)`);
+            return false;
+        }
+        
+        // Find task by exact description match
+        const task = agent.todos.find(t => t.description === description && t.status === 'pending');
+        if (task) {
+            task.status = 'completed';
+            task.message = message;
+            task.completedAt = new Date();
+            
+            // Clear timeout if set
+            if (task.timeoutId) {
+                clearTimeout(task.timeoutId);
+                delete task.timeoutId;
+            }
+            
+            console.log(`✅ TaskManager: Task completed by description "${description}" for agent ${agentId}`);
+            this.notify();
+            return true;
+        } else {
+            console.warn(`⚠️ TaskManager.completeTaskByDescription: Task not found with description "${description}" for agent ${agentId}`);
+            console.log(`🔍 Available pending tasks:`, agent.todos.filter(t => t.status === 'pending').map(t => t.description));
+            return false;
+        }
+    }
+
     // Mark task as failed
     failTask(agentId, taskId, error) {
         const agent = this.agentTasks.get(agentId);
@@ -216,11 +254,15 @@ export class AITaskManager {
             return nextTask;
         }
 
-        // No more pending tasks
-        if (agent.todos.every(t => t.status === 'completed')) {
+        // No more pending tasks - but only mark as completed if there are actual tasks
+        if (agent.todos.length > 0 && agent.todos.every(t => t.status === 'completed')) {
             agent.status = 'completed';
             console.log(`🎉 WorkflowManager: Agent ${agentId} completed all tasks`);
             this.notify();
+        } else if (agent.todos.length === 0) {
+            // Empty agent - keep it in running state until tasks are loaded
+            agent.status = 'running';
+            console.log(`⏳ WorkflowManager: Agent ${agentId} is empty, keeping in running state`);
         }
 
         return null;
@@ -406,9 +448,17 @@ export function createWorkflowManager(aiTasks) {
             
             console.log(`🔄 WorkflowManager: Resetting workflow (mode: ${mode}), old agent: ${currentAgentId}`);
             aiTasks.reset();
-            currentAgentId = aiTasks.createLegacyWorkflow(mode);
-            console.log(`🔄 WorkflowManager: New agent created: ${currentAgentId}`);
-            legacyMode = true;
+            
+            if (mode === 'ai_agent') {
+                // For AI Agent mode, create an empty agent that will be populated by AITasks.loadPlan()
+                currentAgentId = aiTasks.createAgent('main_agent', 'AI Agent Analysis', []);
+                console.log(`🔄 WorkflowManager: Created empty AI Agent: ${currentAgentId}`);
+                legacyMode = false;
+            } else {
+                currentAgentId = aiTasks.createLegacyWorkflow(mode);
+                console.log(`🔄 WorkflowManager: New legacy agent created: ${currentAgentId}`);
+                legacyMode = true;
+            }
         },
 
         start() {

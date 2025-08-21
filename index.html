@@ -68,11 +68,12 @@
    
         <label class="tag">
           Mode:
-          <span class="tooltip tooltip-wide" data-tooltip="Auto: Uses AI-like detection to automatically assign column roles and generate aggregates. Manual: Allows you to override column roles and add custom aggregates.">
+          <span class="tooltip tooltip-wide" data-tooltip="Auto: Uses AI-like detection to automatically assign column roles and generate aggregates. Manual: Allows you to override column roles and add custom aggregates. AI Agent: Uses advanced AI to intelligently analyze data and create comprehensive analysis plans.">
           </span>
           <select id="mode">
             <option value="auto" selected>Auto</option>
             <option value="manual">Manual</option>
+            <option value="ai_agent">AI Agent</option>
           </select>
         </label>
         <label><input id="autoExclude" type="checkbox" checked /> Auto-exclude totals/subtotals
@@ -565,14 +566,68 @@ function updateAiTodoList(data) {
     const progressBar = $('#ai-progress-bar');
     const currentTaskDetails = $('#ai-current-task-details');
 
-    if (!todoList || !container || !progressBar || !currentTaskDetails) return;
+    // Debug logging to check if elements are found
+    console.log('🔍 updateAiTodoList debug:', {
+        todoList: !!todoList,
+        container: !!container,
+        progressBar: !!progressBar,
+        currentTaskDetails: !!currentTaskDetails,
+        status,
+        tasksLength: tasks.length,
+        mode: MODE
+    });
 
-    if (status === 'idle' || tasks.length === 0) {
+    if (!todoList || !container || !progressBar || !currentTaskDetails) {
+        console.error('❌ Missing UI elements in updateAiTodoList');
+        return;
+    }
+
+    // Don't hide section for AI Agent mode when agent is running (tasks may still be loading)
+    if (status === 'idle' || (tasks.length === 0 && !(MODE === 'ai_agent' && status === 'running'))) {
         container.style.display = 'none';
         return;
     }
 
     container.style.display = 'block';
+
+    // Special handling for AI Agent mode with empty tasks (loading state)
+    if (MODE === 'ai_agent' && tasks.length === 0 && status === 'running') {
+        progressBar.style.width = '0%';
+        progressBar.setAttribute('aria-valuenow', 0);
+        progressBar.className = 'progress-active';
+        
+        currentTaskDetails.innerHTML = `
+            <div class="current-task-info">
+                <div class="task-spinner">🤖</div>
+                <div class="task-description">AI Agent is analyzing your data and generating intelligent analysis plan...</div>
+                <div class="task-timing">Please wait while tasks are being created</div>
+            </div>
+        `;
+        
+        todoList.innerHTML = `
+            <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                <div class="task-content">
+                    <span class="task-icon in-progress">🤖</span>
+                    <div class="task-info">
+                        <div class="task-description">Generating AI Agent analysis plan...</div>
+                        <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
+                    </div>
+                </div>
+            </li>
+        `;
+        
+        // Override CSS !important rules that hide the todo list
+        todoList.style.setProperty('display', 'block', 'important');
+        todoList.style.setProperty('visibility', 'visible', 'important');
+        todoList.style.setProperty('opacity', '1', 'important');
+        todoList.style.setProperty('height', 'auto', 'important');
+        todoList.style.setProperty('overflow', 'visible', 'important');
+        console.log('🔧 Overriding CSS !important rules to show todoList');
+        
+        console.log('🤖 Showing AI Agent loading state, todoList innerHTML length:', todoList.innerHTML.length);
+        console.log('🔍 todoList computed styles:', window.getComputedStyle(todoList).display);
+        return;
+    }
 
     // Enhanced progress calculation - include in-progress tasks as partial progress
     const completedTasks = tasks.filter(task => task.status === 'completed').length;
@@ -620,6 +675,15 @@ function updateAiTodoList(data) {
     // Enhanced todo list with better UI
     todoList.innerHTML = '';
     
+    // Override CSS !important rules that hide the todo list
+    todoList.style.setProperty('display', 'block', 'important');
+    todoList.style.setProperty('visibility', 'visible', 'important');
+    todoList.style.setProperty('opacity', '1', 'important');
+    todoList.style.setProperty('height', 'auto', 'important');
+    todoList.style.setProperty('overflow', 'visible', 'important');
+    
+    console.log('📝 Populating regular todo list with', tasks.length, 'tasks');
+    
     // Group tasks by type for better organization
     const taskGroups = tasks.reduce((groups, task) => {
         const type = task.type || 'general';
@@ -633,13 +697,35 @@ function updateAiTodoList(data) {
         if (Object.keys(taskGroups).length > 1 && type !== 'general') {
             const groupHeader = document.createElement('li');
             groupHeader.className = 'task-group-header';
+            
+            // ✅ CRITICAL: Override CSS !important rules for group headers too
+            groupHeader.style.setProperty('display', 'list-item', 'important');
+            groupHeader.style.setProperty('visibility', 'visible', 'important');
+            groupHeader.style.setProperty('opacity', '1', 'important');
+            groupHeader.style.setProperty('height', 'auto', 'important');
+            groupHeader.style.setProperty('overflow', 'visible', 'important');
+            groupHeader.style.setProperty('margin', '12px 0 4px 0', 'important');
+            groupHeader.style.setProperty('padding', '0', 'important');
+            groupHeader.style.setProperty('font-weight', 'bold', 'important');
+            groupHeader.style.setProperty('color', '#666', 'important');
+            
             groupHeader.innerHTML = `<div class="group-title">${type.toUpperCase().replace('-', ' ')}</div>`;
             todoList.appendChild(groupHeader);
+            console.log(`📂 Added group header with !important overrides: ${type.toUpperCase()}`);
         }
         
         typeTasks.forEach((task, index) => {
             const li = document.createElement('li');
             li.className = `task-item task-${task.status} task-type-${task.type || 'general'}`;
+            
+            // ✅ CRITICAL: Override CSS !important rules for each task item
+            li.style.setProperty('display', 'list-item', 'important');
+            li.style.setProperty('visibility', 'visible', 'important');
+            li.style.setProperty('opacity', '1', 'important');
+            li.style.setProperty('height', 'auto', 'important');
+            li.style.setProperty('overflow', 'visible', 'important');
+            li.style.setProperty('margin', '0', 'important');
+            li.style.setProperty('padding', '8px 0', 'important');
             
             const statusIcon = {
                 'pending': '⏳',
@@ -668,6 +754,7 @@ function updateAiTodoList(data) {
             `;
             
             todoList.appendChild(li);
+            console.log(`📋 Added AI Agent task with !important overrides: ${task.description}`);
         });
     });
 
@@ -737,7 +824,8 @@ function updateAiTodoList(data) {
         const hideTimeout = setTimeout(() => {
             // Double-check the workflow is still completed and no new tasks are running
             const currentState = WorkflowManager.getState();
-            if (currentState.status === 'completed') {
+            // Don't hide during AI Agent mode - tasks may still be loading
+            if (currentState.status === 'completed' && MODE !== 'ai_agent') {
                 console.log('🫥 Hiding completed workflow section');
                 container.style.display = 'none';
             } else {
@@ -901,10 +989,117 @@ function updateAiTodoList(data) {
             existingStatus.remove();
         }
     }
+    
+    // Final visibility check - override CSS !important rules
+    if (todoList && container.style.display === 'block') {
+        todoList.style.setProperty('display', 'block', 'important');
+        todoList.style.setProperty('visibility', 'visible', 'important');
+        todoList.style.setProperty('opacity', '1', 'important');
+        todoList.style.setProperty('height', 'auto', 'important');
+        todoList.style.setProperty('overflow', 'visible', 'important');
+        console.log('🔧 Final todoList visibility check - overriding CSS !important rules');
+    }
 }
 
 // Subscribe the UI update function to the manager
 WorkflowManager.subscribe(updateAiTodoList);
+
+// Add comprehensive CSS override to defeat the problematic hiding rules
+if (!document.getElementById('ai-todo-list-override-styles')) {
+    const styleOverride = document.createElement('style');
+    styleOverride.id = 'ai-todo-list-override-styles';
+    styleOverride.innerHTML = `
+        /* Override problematic CSS rules with highest specificity */
+        #ai-todo-list, 
+        #ai-todo-list li, 
+        #ai-todo-list .task-item,
+        #ai-todo-list .task-group-header,
+        #ai-todo-list .task-completed,
+        #ai-todo-list .task-pending,
+        #ai-todo-list .task-in-progress,
+        #ai-todo-list .task-type-chart-generation,
+        #ai-todo-list .task-type-ai-explanation,
+        #ai-todo-list .task-type-workflow-completion,
+        .workflow-status .running-status,
+        .workflow-status .running-status .progress-indicators,
+        .workflow-status .running-status .action-buttons,
+        .workflow-status .running-status .running-info .task-header,
+        .workflow-status .running-status .running-info .task-submessage,
+        .workflow-status .running-status .running-info .time-display,
+        .running-status,
+        .running-info,
+        .task-header,
+        .task-submessage,
+        .time-display,
+        .progress-indicators,
+        .action-buttons {
+            display: list-item !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            height: auto !important;
+            overflow: visible !important;
+        }
+        
+        #ai-todo-list {
+            display: block !important;
+            list-style: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        
+        #ai-todo-list .task-group-header {
+            font-weight: bold !important;
+            color: #666 !important;
+            margin-top: 12px !important;
+            margin-bottom: 4px !important;
+            padding: 4px 0 !important;
+            background: #f5f5f5 !important;
+            border-radius: 4px !important;
+        }
+        
+        #ai-todo-list .task-item {
+            border: 1px solid #e1e5e9 !important;
+            border-radius: 6px !important;
+            margin-bottom: 8px !important;
+            padding: 12px !important;
+            background: #fff !important;
+        }
+        
+        #ai-todo-list .task-content {
+            display: flex !important;
+            align-items: flex-start !important;
+            gap: 12px !important;
+        }
+        
+        #ai-todo-list .task-icon {
+            font-size: 16px !important;
+            line-height: 1 !important;
+        }
+        
+        #ai-todo-list .task-info {
+            flex: 1 !important;
+        }
+        
+        #ai-todo-list .task-description {
+            font-weight: 500 !important;
+            color: #24292f !important;
+            margin-bottom: 4px !important;
+        }
+        
+        #ai-todo-list .task-message {
+            color: #656d76 !important;
+            font-size: 14px !important;
+            margin-bottom: 4px !important;
+        }
+        
+        #ai-todo-list .task-timestamp {
+            color: #656d76 !important;
+            font-size: 12px !important;
+        }
+    `;
+    document.head.appendChild(styleOverride);
+    console.log('🎨 Added comprehensive CSS override styles for AI todo list');
+}
 
 // Event delegation for WorkflowManager buttons to prevent "undefined" errors
 document.addEventListener('click', (e) => {
@@ -3554,7 +3749,22 @@ $('#downloadFiltered').addEventListener('click', ()=>{
   showToast('Filtered CSV downloaded', 'success');
 });
 
-$('#autoBtn').onclick = () => renderAggregates();
+$('#autoBtn').onclick = () => {
+    // Check if workflow is already running
+    const workflowState = WorkflowManager.getState();
+    if (workflowState.status === 'running') {
+        showToast('Workflow is already running. Please wait for completion.', 'warning');
+        return;
+    }
+    
+    // Check if renderAggregates is already running
+    if (isRenderingAggregates) {
+        showToast('Analysis is already in progress. Please wait for completion.', 'warning');
+        return;
+    }
+    
+    renderAggregates();
+};
 
 async function workerAggregateWithFallback(rows, profile, plan, timeoutMs = 15000) {
   // Fallback function using existing main-thread logic
@@ -4025,6 +4235,266 @@ async function getAiAnalysisPlan(context) {
     };
 }
 
+async function getIntelligentAiAnalysisPlan(context) {
+    console.log('[Debug] getIntelligentAiAnalysisPlan: Starting AI Agent analysis');
+    
+    // Get API settings
+    const apiKey = localStorage.getItem('gemini_api_key');
+    const model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
+    
+    if (!apiKey || apiKey.trim() === '') {
+        console.log('[Debug] No API key found, falling back to standard auto plan');
+        const plan = autoPlan(context.profile, context.includedRows, context.excludedDimensions);
+        return {
+            tasks: [{
+                description: 'Running standard analysis (no API key provided)',
+                type: 'auto-analysis-fallback'
+            }],
+            jobs: plan.jobs,
+            planType: 'auto-analysis-fallback'
+        };
+    }
+
+    try {
+        // Prepare data profile for AI analysis
+        const dataProfile = {
+            columns: context.profile.columns.map(col => ({
+                name: col.name,
+                type: col.type,
+                uniqueValues: col.uniqueValues,
+                sampleValues: col.values ? col.values.slice(0, 5) : []
+            })),
+            rowCount: context.profile.rowCount,
+            sampleRows: context.includedRows.slice(0, 3)
+        };
+
+        const prompt = `You are an expert data analyst. Analyze this dataset and create a comprehensive analysis plan.
+
+Dataset Profile:
+${JSON.stringify(dataProfile, null, 2)}
+
+Create an analysis plan with the following structure:
+1. Identify key metrics (numerical columns for calculations)
+2. Identify key dimensions (categorical columns for grouping)
+3. Suggest 3-5 meaningful aggregations that will reveal insights
+4. For each aggregation, specify: groupBy column, metric column, aggregation type (sum/avg/count/max/min)
+
+Return your response as JSON in this exact format:
+{
+    "jobs": [
+        {"groupBy": "column_name", "metric": "metric_column", "agg": "sum|avg|count|max|min"}
+    ],
+    "planType": "intelligent-analysis",
+    "reasoning": "Brief explanation of why these aggregations were chosen"
+}
+
+IMPORTANT: Do NOT include a "tasks" array in your response. The system will automatically generate appropriate workflow tasks based on the jobs you specify.
+
+Focus on creating meaningful business insights. Prioritize aggregations that will show trends, comparisons, and patterns in the data.`;
+
+        console.log('[Debug] Calling Gemini API for intelligent analysis plan');
+        
+        // ✅ UPDATE UI: Show API call in progress
+        const container = document.getElementById('ai-todo-list-section');
+        const todoList = document.getElementById('ai-todo-list');
+        const progressBar = document.getElementById('ai-progress-bar');
+        const currentTaskDetails = document.getElementById('ai-current-task-details');
+        
+        if (container && todoList && progressBar && currentTaskDetails) {
+            // Update progress to show API call
+            progressBar.style.width = '15%';
+            progressBar.setAttribute('aria-valuenow', 15);
+            
+            currentTaskDetails.innerHTML = `
+                <div class="current-task-info">
+                    <div class="task-spinner">🌐</div>
+                    <div class="task-description">Calling Gemini API for intelligent analysis...</div>
+                    <div class="task-timing">Analyzing your data structure and generating plan</div>
+                </div>
+            `;
+            
+            // Override CSS !important rules
+            todoList.style.setProperty('display', 'block', 'important');
+            todoList.style.setProperty('visibility', 'visible', 'important');
+            todoList.style.setProperty('opacity', '1', 'important');
+            todoList.style.setProperty('height', 'auto', 'important');
+            todoList.style.setProperty('overflow', 'visible', 'important');
+            
+            todoList.innerHTML = `
+                <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                    <div class="task-content">
+                        <span class="task-icon in-progress">🌐</span>
+                        <div class="task-info">
+                            <div class="task-description">Calling Gemini API for intelligent analysis...</div>
+                            <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
+                        </div>
+                    </div>
+                </li>
+            `;
+            
+            console.log('🌐 Updated UI to show Gemini API call in progress');
+        }
+        
+        const response = await fetchWithRetry(apiKey, model, prompt, (msg, type) => {
+            if (typeof showToast === 'function') {
+                showToast(msg, type);
+            }
+        });
+
+        // ✅ UPDATE UI: Show response processing
+        if (container && todoList && progressBar && currentTaskDetails) {
+            progressBar.style.width = '25%';
+            progressBar.setAttribute('aria-valuenow', 25);
+            
+            currentTaskDetails.innerHTML = `
+                <div class="current-task-info">
+                    <div class="task-spinner">⚙️</div>
+                    <div class="task-description">Processing AI response and generating tasks...</div>
+                    <div class="task-timing">Creating concrete workflow tasks</div>
+                </div>
+            `;
+            
+            // Override CSS !important rules  
+            todoList.style.setProperty('display', 'block', 'important');
+            todoList.style.setProperty('visibility', 'visible', 'important');
+            todoList.style.setProperty('opacity', '1', 'important');
+            todoList.style.setProperty('height', 'auto', 'important');
+            todoList.style.setProperty('overflow', 'visible', 'important');
+            
+            todoList.innerHTML = `
+                <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                    <div class="task-content">
+                        <span class="task-icon in-progress">⚙️</span>
+                        <div class="task-info">
+                            <div class="task-description">Processing AI response and generating tasks...</div>
+                            <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
+                        </div>
+                    </div>
+                </li>
+            `;
+            
+            console.log('⚙️ Updated UI to show response processing');
+        }
+        
+        // Parse AI response
+        let aiPlan;
+        try {
+            // Extract JSON from response (in case there's extra text)
+            const jsonMatch = response.match(/\{[\s\S]*\}/);
+            const jsonString = jsonMatch ? jsonMatch[0] : response;
+            aiPlan = JSON.parse(jsonString);
+            
+            // Validate the plan structure
+            if (!aiPlan.jobs || !Array.isArray(aiPlan.jobs)) {
+                throw new Error('Invalid plan structure from AI');
+            }
+
+            // Validate that columns exist in the dataset
+            const columnNames = context.profile.columns.map(c => c.name);
+            aiPlan.jobs = aiPlan.jobs.filter(job => 
+                columnNames.includes(job.groupBy) && 
+                columnNames.includes(job.metric) &&
+                ['sum', 'avg', 'count', 'max', 'min'].includes(job.agg)
+            );
+
+            console.log('[Debug] AI Generated Plan:', JSON.stringify(aiPlan, null, 2));
+            
+            // Generate concrete workflow tasks based on the actual jobs that will be executed
+            const limitedJobs = aiPlan.jobs.slice(0, 8); // Limit to 8 charts
+            const workflowTasks = [];
+            
+            // Add chart generation tasks
+            limitedJobs.forEach((job, index) => {
+                const chartType = job.agg === 'count' ? 'bar chart' : 
+                                job.agg === 'sum' || job.agg === 'avg' ? 'bar chart' : 'data table';
+                workflowTasks.push({
+                    description: `Building ${chartType}: ${job.agg}(${job.metric}) by ${job.groupBy}`,
+                    type: 'chart-generation',
+                    jobIndex: index
+                });
+            });
+            
+            // Add AI explanation tasks
+            limitedJobs.forEach((job, index) => {
+                workflowTasks.push({
+                    description: `Generating AI explanation for ${job.groupBy} analysis`,
+                    type: 'ai-explanation',
+                    jobIndex: index
+                });
+            });
+            
+            // Add completion task
+            workflowTasks.push({
+                description: 'Completing AI Agent analysis workflow',
+                type: 'workflow-completion'
+            });
+            
+            console.log('[Debug] Generated concrete workflow tasks:', workflowTasks.map(t => t.description));
+            
+            // ✅ FINAL UPDATE: Show tasks ready to load
+            if (container && todoList && progressBar && currentTaskDetails) {
+                progressBar.style.width = '35%';
+                progressBar.setAttribute('aria-valuenow', 35);
+                
+                currentTaskDetails.innerHTML = `
+                    <div class="current-task-info">
+                        <div class="task-spinner">✅</div>
+                        <div class="task-description">AI Agent plan ready - loading ${workflowTasks.length} tasks...</div>
+                        <div class="task-timing">About to start chart generation</div>
+                    </div>
+                `;
+                
+                // Override CSS !important rules
+                todoList.style.setProperty('display', 'block', 'important');
+                todoList.style.setProperty('visibility', 'visible', 'important');
+                todoList.style.setProperty('opacity', '1', 'important');
+                todoList.style.setProperty('height', 'auto', 'important');
+                todoList.style.setProperty('overflow', 'visible', 'important');
+                
+                todoList.innerHTML = `
+                    <li class="task-item task-completed" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                        <div class="task-content">
+                            <span class="task-icon completed">✅</span>
+                            <div class="task-info">
+                                <div class="task-description">AI Agent plan generated - ${workflowTasks.length} tasks ready</div>
+                                <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
+                            </div>
+                        </div>
+                    </li>
+                `;
+                
+                console.log('✅ AI Agent plan ready - about to load tasks');
+            }
+            
+            return {
+                tasks: workflowTasks,
+                jobs: limitedJobs,
+                planType: aiPlan.planType || 'intelligent-analysis',
+                reasoning: aiPlan.reasoning
+            };
+
+        } catch (parseError) {
+            console.error('[Debug] Failed to parse AI response:', parseError);
+            throw new Error('Failed to parse AI analysis plan');
+        }
+
+    } catch (error) {
+        console.error('[Debug] Error in intelligent AI analysis:', error);
+        console.log('[Debug] Falling back to standard auto plan');
+        
+        // Fallback to standard auto plan
+        const plan = autoPlan(context.profile, context.includedRows, context.excludedDimensions);
+        return {
+            tasks: [{
+                description: 'Running standard analysis (AI analysis failed)',
+                type: 'auto-analysis-fallback'
+            }],
+            jobs: plan.jobs,
+            planType: 'auto-analysis-fallback'
+        };
+    }
+}
+
 async function runAiWorkflow(includedRows, excludedDimensions = []) {
   const apiKey = localStorage.getItem('gemini_api_key');
   if (!apiKey || apiKey.trim() === '') {
@@ -4050,7 +4520,10 @@ async function runAiWorkflow(includedRows, excludedDimensions = []) {
     workflowTimer.start();
     
     try {
-        WorkflowManager.completeTask('init');
+        // For AI Agent mode, skip legacy init completion - tasks will be loaded dynamically
+        if (MODE !== 'ai_agent') {
+            WorkflowManager.completeTask('init');
+        }
         
         await new Promise(resolve => setTimeout(resolve, 50)); // Brief pause for UI update
         
@@ -4059,6 +4532,86 @@ async function runAiWorkflow(includedRows, excludedDimensions = []) {
             plan = MANUAL_JOBS.length ? { jobs: MANUAL_JOBS.slice(0, 10) } : planFromManualRoles(PROFILE);
             WorkflowManager.completeTask('analysis', 'Using manual roles.');
             WorkflowManager.completeTask('config');
+        } else if (MODE === 'ai_agent') {
+            const context = {
+                profile: PROFILE,
+                includedRows: includedRows.slice(0, 5), // Sample rows
+                excludedDimensions,
+                maxCharts: 10
+            };
+            
+            // ✅ IMMEDIATE UI FEEDBACK: Show AI Agent is starting before API call
+            console.log('🚀 AI Agent starting - showing immediate UI feedback');
+            const container = document.getElementById('ai-todo-list-section');
+            const todoList = document.getElementById('ai-todo-list');
+            const progressBar = document.getElementById('ai-progress-bar');
+            const currentTaskDetails = document.getElementById('ai-current-task-details');
+            
+            if (container && todoList && progressBar && currentTaskDetails) {
+                // Force show the workflow section immediately
+                container.style.display = 'block';
+                
+                // Show starting state
+                progressBar.style.width = '5%';
+                progressBar.setAttribute('aria-valuenow', 5);
+                progressBar.className = 'progress-active';
+                
+                currentTaskDetails.innerHTML = `
+                    <div class="current-task-info">
+                        <div class="task-spinner">🤖</div>
+                        <div class="task-description">AI Agent is starting intelligent analysis...</div>
+                        <div class="task-timing">Preparing to call Gemini API</div>
+                    </div>
+                `;
+                
+                // Override the CSS !important rules that hide the todo list
+                todoList.style.setProperty('display', 'block', 'important');
+                todoList.style.setProperty('visibility', 'visible', 'important');
+                todoList.style.setProperty('opacity', '1', 'important');
+                todoList.style.setProperty('height', 'auto', 'important');
+                todoList.style.setProperty('overflow', 'visible', 'important');
+                
+                todoList.innerHTML = `
+                    <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                        <div class="task-content">
+                            <span class="task-icon in-progress">🚀</span>
+                            <div class="task-info">
+                                <div class="task-description">AI Agent starting analysis...</div>
+                                <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
+                            </div>
+                        </div>
+                    </li>
+                `;
+                
+                console.log('✅ AI Agent starting state displayed to user');
+            }
+            
+            const dynamicPlan = await getIntelligentAiAnalysisPlan(context);
+            console.log('🔄 About to load AI Agent tasks:', dynamicPlan.tasks.length, 'tasks');
+            AITasks.loadPlan(WorkflowManager.getCurrentAgentId(), dynamicPlan.tasks);
+            
+            // Force immediate UI update after tasks are loaded
+            setTimeout(() => {
+                console.log('🔍 Checking UI state after AI tasks loaded');
+                const todoListCheck = document.getElementById('ai-todo-list');
+                if (todoListCheck) {
+                    console.log('📋 TodoList innerHTML length after load:', todoListCheck.innerHTML.length);
+                    console.log('📋 TodoList display style:', todoListCheck.style.display);
+                    console.log('📋 TodoList computed display:', window.getComputedStyle(todoListCheck).display);
+                }
+            }, 100);
+            
+            // For AI Agent mode, don't use legacy WorkflowManager task completion
+            // The AI Agent tasks will be completed as actual work progresses
+            console.log('🤖 AI Agent tasks loaded, skipping legacy task completion');
+            
+            plan = {
+                jobs: dynamicPlan.jobs,
+                charts: [],
+                planType: dynamicPlan.planType
+            }; // Include planType for proper workflow handling
+            
+            // Don't complete analysis task yet - wait until after cards are built
         } else {
             const context = {
                 profile: PROFILE,
@@ -4099,6 +4652,23 @@ async function runAiWorkflow(includedRows, excludedDimensions = []) {
 // Global flag to prevent concurrent executions
 let isRenderingAggregates = false;
 let pendingRender = false;
+// Button state management for workflow prevention
+function setGenerateButtonState(isRunning) {
+    const autoBtn = document.getElementById('autoBtn');
+    if (!autoBtn) return;
+    
+    if (isRunning) {
+        autoBtn.disabled = true;
+        autoBtn.textContent = 'Workflow Running...';
+        autoBtn.style.opacity = '0.6';
+        autoBtn.style.cursor = 'not-allowed';
+    } else {
+        autoBtn.disabled = false;
+        autoBtn.textContent = 'Generate Cards';
+        autoBtn.style.opacity = '1';
+        autoBtn.style.cursor = 'pointer';
+    }
+}
 
 async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], fallbackDepth = 0, retry = false) {
     if (!ROWS) return showToast('Load a CSV first.', 'error');
@@ -4107,14 +4677,23 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         window.currentData = ROWS;
     }
 
-    // Prevent concurrent executions
+    // Enhanced concurrent execution prevention
     if (isRenderingAggregates && !retry) {
         console.log('⏸️ renderAggregates already running, queueing next run');
         pendingRender = true;
         return;
     }
     
+    // Check WorkflowManager state for additional protection
+    const workflowState = WorkflowManager.getState();
+    if (workflowState.status === 'running' && !retry) {
+        console.log('⏸️ WorkflowManager indicates workflow is running, skipping new execution');
+        showToast('Workflow is already running. Please wait for completion.', 'warning');
+        return;
+    }
+    
     isRenderingAggregates = true;
+    setGenerateButtonState(true); // Disable button when workflow starts
     console.log('🚀 Starting renderAggregates', { chartsSnapshot: !!chartsSnapshot, retry });
 
     try {
@@ -4179,6 +4758,13 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                             if (result.explanationTask) {
                                 explanationQueue.push(result.explanationTask);
                             }
+                            
+                            // Complete AI Agent chart generation task if in AI Agent mode
+                            if (MODE === 'ai_agent' && plan.planType === 'intelligent-analysis') {
+                                const chartTaskDescription = `Building ${job.agg === 'count' ? 'bar chart' : job.agg === 'sum' || job.agg === 'avg' ? 'bar chart' : 'data table'}: ${job.agg}(${job.metric}) by ${job.groupBy}`;
+                                console.log(`✅ Completing AI Agent chart task: ${chartTaskDescription}`);
+                                AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), chartTaskDescription);
+                            }
                         }
                     }
                 };
@@ -4193,6 +4779,14 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                         WorkflowManager.updateCurrentTaskMessage(`Generating explanation ${i + 1} of ${explanationQueue.length}...`);
                         await generateExplanation(task.agg, task.job, task.card);
                         console.log(`✅ Explanation ${i + 1} completed.`);
+                        
+                        // Complete AI Agent explanation task if in AI Agent mode
+                        if (MODE === 'ai_agent' && plan.planType === 'intelligent-analysis') {
+                            const explanationTaskDescription = `Generating AI explanation for ${task.job.groupBy} analysis`;
+                            console.log(`✅ Completing AI Agent explanation task: ${explanationTaskDescription}`);
+                            AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), explanationTaskDescription);
+                        }
+                        
                         console.log(`🔄 Triggering auto-save after explanation ${i + 1}...`);
                         debouncedAutoSave();
                     }
@@ -4201,9 +4795,31 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     console.log('ℹ️ No explanations to generate');
                 }
                 
+                // Complete AI Agent workflow completion task if in AI Agent mode
+                if (MODE === 'ai_agent' && plan.planType === 'intelligent-analysis') {
+                    console.log('✅ Completing AI Agent workflow completion task');
+                    AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), 'Completing AI Agent analysis workflow');
+                    
+                    // Ensure WorkflowManager is also completed for AI Agent mode
+                    console.log('✅ Ensuring WorkflowManager completion for AI Agent mode');
+                    if (WorkflowManager.getState().status === 'running') {
+                        // Complete any remaining WorkflowManager tasks for AI Agent mode
+                        const currentState = WorkflowManager.getState();
+                        const pendingTasks = currentState.tasks.filter(t => t.status === 'pending' || t.status === 'in-progress');
+                        
+                        pendingTasks.forEach(task => {
+                            if (task.id !== 'ai-analysis') { // ai-analysis is completed above
+                                console.log(`✅ Auto-completing WorkflowManager task: ${task.id}`);
+                                WorkflowManager.completeTask(task.id, 'Completed as part of AI Agent workflow');
+                            }
+                        });
+                    }
+                }
+                
                 // Mark rendering as complete now that explanations are done
                 console.log('🏁 All work including explanations completed, releasing render lock');
                 isRenderingAggregates = false;
+                setGenerateButtonState(false); // Re-enable button when workflow completes
                 
                 // Process any pending renders
                 if (pendingRender) {
@@ -4220,6 +4836,10 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                    WorkflowManager.completeTask('auto-analysis', 'AI analysis plan created. Building cards...');
                 } else if (plan.planType === 'erp-analysis') {
                    WorkflowManager.completeTask('erp-analysis', 'ERP analysis completed. Building cards...');
+                } else if (plan.planType === 'intelligent-analysis') {
+                   WorkflowManager.completeTask('ai-analysis', 'Intelligent AI analysis completed. Building cards...');
+                } else if (plan.planType === 'auto-analysis-fallback') {
+                   WorkflowManager.completeTask('auto-analysis', 'Fallback analysis completed. Building cards...');
                 }
                 
                 if (WorkflowManager.getState().status === 'running') {
@@ -4296,6 +4916,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     // Release render lock for fallback path
                     console.log('🏁 Fallback plan completed, releasing render lock');
                     isRenderingAggregates = false;
+                    setGenerateButtonState(false); // Re-enable button after fallback
                     
                     // Process any pending renders
                     if (pendingRender) {
@@ -4310,6 +4931,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     // No fallback plan available
                     console.log('🏁 No fallback plan available, releasing render lock');
                     isRenderingAggregates = false;
+                    setGenerateButtonState(false); // Re-enable button when no fallback available
                     
                     if (pendingRender) {
                         const wasPending = pendingRender;
