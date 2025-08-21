@@ -519,7 +519,7 @@
 <script type="module">
 import * as Store from './ai_chart_store.js';
 import { fetchWithRetry } from './ai_chart_api.js';
-import { initializeAiSettingsHandlers } from './ai_chart_ai_settings_handlers.js';
+import { initializeAiSettingsHandlers, updateAIFeaturesVisibility } from './ai_chart_ai_settings_handlers.js';
 import { initializeSectionToggles } from './ai_chart_section_toggle_logic.js';
 import { getErpSpecificAutoPlan, getErpMetricPriority, getErpAnalysisPriority } from './ai_chart_erp_logic.js';
 import { applyMasonryLayout } from './ai_chart_masonry.js';
@@ -610,7 +610,10 @@ function updateAiTodoList(data) {
         return;
     }
 
-    container.style.display = 'block';
+    const apiKey = localStorage.getItem('gemini_api_key');
+    if (apiKey) {
+        container.style.display = 'block';
+    }
 
     // Special handling for AI Agent mode with empty tasks (loading state)
     if (MODE === 'ai_agent' && tasks.length === 0 && status === 'running') {
@@ -3699,9 +3702,12 @@ $('#loadBtn').onclick = async ()=>{
             if (!window.currentData || window.currentData.length === 0) {
               window.currentData = ROWS;
             }
-            const chatSection = document.getElementById('ai-analysis-section');
-            if (chatSection) chatSection.style.display = 'block';
-            window.initializeChat();
+            const apiKey = localStorage.getItem('gemini_api_key');
+            if (typeof window.initializeChat === 'function' && apiKey) {
+                const chatSection = document.getElementById('ai-analysis-section');
+                if (chatSection) chatSection.style.display = 'block';
+                window.initializeChat();
+            }
           }
         } catch (e) {
           console.warn('AI Analysis Chat init after manual load failed:', e);
@@ -3723,9 +3729,12 @@ $('#loadBtn').onclick = async ()=>{
             if (!window.currentData || window.currentData.length === 0) {
               window.currentData = ROWS;
             }
-            const chatSection = document.getElementById('ai-analysis-section');
-            if (chatSection) chatSection.style.display = 'block';
-            window.initializeChat();
+            const apiKey = localStorage.getItem('gemini_api_key');
+            if (typeof window.initializeChat === 'function' && apiKey) {
+                const chatSection = document.getElementById('ai-analysis-section');
+                if (chatSection) chatSection.style.display = 'block';
+                window.initializeChat();
+            }
           }
         } catch (e) {
           console.warn('AI Analysis Chat init after manual load (AI Agent) failed:', e);
@@ -4999,7 +5008,8 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         // Initialize AI Analysis Chat after aggregates are ready
         setTimeout(() => {
             try {
-                if (typeof window.initializeChat === 'function' && window.currentData && window.currentData.length > 0) {
+                const apiKey = localStorage.getItem('gemini_api_key');
+                if (typeof window.initializeChat === 'function' && window.currentData && window.currentData.length > 0 && apiKey) {
                     const chatSection = document.getElementById('ai-analysis-section');
                     if (chatSection) {
                         chatSection.style.display = 'block';
@@ -5969,6 +5979,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderHistorySidebar();
     initializeAiSettingsHandlers({ $, showToast });
     initializeSectionToggles();
+    updateAIFeaturesVisibility();
     const grid = $('#results');
     if (grid) {
         // The grid is populated dynamically when data is loaded.
@@ -7077,7 +7088,8 @@ Please provide a helpful, insightful response based on the above data analysis c
     chatSection.setAttribute('data-chat-initialized', 'true');
 
     // Show chat section when data is loaded
-    if (window.currentData && window.currentData.length > 0) {
+    const apiKey = localStorage.getItem('gemini_api_key');
+    if (window.currentData && window.currentData.length > 0 && apiKey) {
       chatSection.style.display = 'block';
       console.log('📱 AI Analysis Chat section shown');
     } else {

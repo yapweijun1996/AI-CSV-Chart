@@ -5,6 +5,19 @@
 let $;
 let showToast;
 
+export function updateAIFeaturesVisibility() {
+    const apiKey = localStorage.getItem('gemini_api_key');
+    const aiWorkflowSection = document.getElementById('ai-todo-list-section');
+    const aiAnalysisSection = document.getElementById('ai-analysis-section');
+
+    if (aiWorkflowSection) {
+        aiWorkflowSection.style.display = apiKey ? 'block' : 'none';
+    }
+    if (aiAnalysisSection) {
+        aiAnalysisSection.style.display = apiKey ? 'block' : 'none';
+    }
+}
+
 export function openAiSettings() {
   const modal = $('#aiSettingsModal');
   const apiKeyInput = $('#apiKeyInput');
@@ -108,7 +121,7 @@ export function initializeAiSettingsHandlers(dependencies) {
 
         showToast('AI settings saved successfully!', 'success');
         $('#aiSettingsModal').classList.remove('open');
-
+        updateAIFeaturesVisibility();
         // Notify listeners that settings changed (e.g., summary/logic can react)
         try { window.dispatchEvent(new StorageEvent('storage', { key: 'default_generate_mode', newValue: defaultMode })); } catch(e) {}
     };
@@ -131,5 +144,6 @@ export function initializeAiSettingsHandlers(dependencies) {
 
         // Notify listeners that default mode preference was cleared
         try { window.dispatchEvent(new StorageEvent('storage', { key: 'default_generate_mode', newValue: null })); } catch(e) {}
+        updateAIFeaturesVisibility();
     };
 }
