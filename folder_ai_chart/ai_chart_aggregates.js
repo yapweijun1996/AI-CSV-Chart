@@ -622,6 +622,141 @@ export function renderChartCard(agg, chartsContainer, defaultType = 'auto', defa
   
   // Create canvas
   c.appendChild(head);
+// Minimal edit-panel + handler (inserted after controls.append(...))
+const editPanel = document.createElement('div');
+editPanel.className = 'edit-panel';
+editPanel.style.display = 'none';
+editPanel.style.padding = '8px';
+editPanel.style.marginTop = '8px';
+
+// Build simple controls using `profile` passed in options
+const parentCard = c.closest('.card');
+const currentGroupBy = parentCard?.dataset?.groupBy || agg.header?.[0] || '';
+const currentMetricName = parentCard?.dataset?.metric || '';
+const currentAggName = parentCard?.dataset?.agg || (currentMetricName ? 'sum' : 'count');
+
+const dimOptions = (profile?.columns || [])
+  .filter(c => ['string', 'date'].includes(c.type))
+  .map(c => `<option value="${c.name}" ${c.name === currentGroupBy ? 'selected' : ''}>${c.name}</option>`)
+  .join('');
+
+const metricOptions = `<option value="">Count records</option>` + (profile?.columns || [])
+  .filter(c => c.type === 'number')
+  .map(c => `<option value="${c.name}" ${c.name === currentMetricName ? 'selected' : ''}>${c.name}</option>`)
+  .join('');
+
+const fnOptions = ['sum', 'avg', 'min', 'max', 'count']
+  .map(fn => `<option value="${fn}" ${fn === currentAggName ? 'selected' : ''}>${fn[0].toUpperCase()}${fn.slice(1)}</option>`)
+  .join('');
+
+editPanel.innerHTML = `
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
+    <label>Group by:
+      <select id="edit-groupby">${dimOptions}</select>
+    </label>
+    <label>Metric:
+      <select id="edit-metric">${metricOptions}</select>
+    </label>
+    <label>Function:
+      <select id="edit-function">${fnOptions}</select>
+    </label>
+    <div style="display:flex;gap:6px;">
+      <button id="edit-apply" style="background:#2563eb;color:#fff;border:none;padding:6px 10px;border-radius:4px;">Apply</button>
+      <button id="edit-cancel" style="background:#6b7280;color:#fff;border:none;padding:6px 10px;border-radius:4px;">Cancel</button>
+    </div>
+  </div>
+`;
+c.appendChild(editPanel);
+
+editBtn.onclick = () => {
+  if (editPanel.style.display === 'none') {
+    editPanel.style.display = 'block';
+    editBtn.textContent = 'Cancel Edit';
+  } else {
+    editPanel.style.display = 'none';
+    editBtn.textContent = 'Edit';
+  }
+};
+
+editPanel.querySelector('#edit-cancel').onclick = () => {
+  editPanel.style.display = 'none';
+  editBtn.textContent = 'Edit';
+};
+
+// Apply handler — robustly find included rows (fallbacks if helper not available)
+editPanel.querySelector('#edit-apply').onclick = async () => {
+  const newGroupBy = editPanel.querySelector('#edit-groupby').value;
+  const newMetric = editPanel.querySelector('#edit-metric').value || null;
+  const newFunction = editPanel.querySelector('#edit-function').value || (newMetric ? 'sum' : 'count');
+
+  // Try multiple ways to obtain the "included rows" array:
+  const includedRows =
+    (typeof options?.getIncludedRows === 'function') ? options.getIncludedRows()
+    : (typeof window.getIncludedRows === 'function') ? window.getIncludedRows()
+    : (typeof getIncludedRows === 'function') ? getIncludedRows()
+    : (Array.isArray(window.ROWS) ? window.ROWS : []);
+
+  // Parent card controls (filter/minGroupShare and showMissing)
+  const currentFilterValue = Number(parentCard?.querySelector('.filter-input')?.value || 0);
+  const currentFilterMode = parentCard?.querySelector('.filter-mode-select')?.value || 'share';
+  const showMissingFlag = parentCard?.dataset?.showMissing === 'true';
+  const currentDateBucket = parentCard?.dataset?.dateBucket || '';
+
+  // Recompute aggregate
+  const newAgg = groupAgg(
+    includedRows,
+    newGroupBy,
+    newMetric,
+    newFunction,
+    currentDateBucket, // date bucket from card dataset if any
+    { mode: currentFilterMode, value: currentFilterValue },
+    !!showMissingFlag,
+    profile
+  );
+
+  // Update agg used by this card and UI
+  agg.header = newAgg.header;
+  agg.rows = newAgg.rows;
+  left.textContent = `Chart for: ${newAgg.header[1]} by ${newAgg.header[0]}`;
+
+  // Persist new settings on the parent card dataset for downstream features/snapshots
+  if (parentCard) {
+    parentCard.dataset.groupBy = newGroupBy || '';
+    parentCard.dataset.metric = newMetric || '';
+    parentCard.dataset.agg = newFunction || '';
+  }
+
+  // Re-render table and charts in this card (same approach used elsewhere)
+  parentCard?.querySelectorAll('.chart-card').forEach(cc => {
+    const canvas = cc.querySelector('canvas');
+    const typeSelEl = cc.querySelector('select');
+    const topNEl = cc.querySelector('input[type="number"]');
+    if (canvas && typeSelEl && topNEl) {
+      const cfg = computeChartConfig(newAgg, typeSelEl.value, Number(topNEl.value) || 20, { noAnimation: true });
+      ensureChart(canvas, cfg, true);
+    }
+  });
+
+  // Re-render aggregate table in this card
+  const tableBox = parentCard?.querySelector('.table-wrap');
+  if (tableBox) renderAggTable(newAgg, tableBox, 20, !!showMissingFlag, { formatNumberFull });
+
+  // Update card subtext with new metadata
+  const subEl = parentCard?.querySelector('.card-sub');
+  if (subEl) subEl.textContent = `${newAgg.rows.length} groups · ${newAgg.header[1]}`;
+
+  // Re-add missing-data warning
+  parentCard?.querySelectorAll('.missing-data-warning').forEach(w => w.remove());
+  addMissingDataWarning(parentCard, newAgg, (includedRows?.length || 0), !!showMissingFlag);
+
+  // Close edit panel
+  editPanel.style.display = 'none';
+  editBtn.textContent = 'Edit';
+
+  if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave();
+  if (typeof applyMasonryLayout === 'function') requestAnimationFrame(() => { try { applyMasonryLayout(); } catch {} });
+  if (typeof showToast === 'function') showToast('Aggregate updated for this card.', 'success');
+};
   const box = document.createElement('div');
   box.className = 'chart-box';
   const canvas = document.createElement('canvas');

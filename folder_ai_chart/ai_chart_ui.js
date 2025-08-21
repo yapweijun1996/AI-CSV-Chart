@@ -983,6 +983,7 @@ function getIncludedRows() {
   console.log(`📊 Using ${includedRows.length} included rows out of ${ROWS.length} total rows for aggregation`);
   return includedRows;
 }
+window.getIncludedRows = getIncludedRows;
 function buildRawHeader(columns){
   const thead = $('#dataThead'); thead.innerHTML='';
   const tr = document.createElement('tr');
