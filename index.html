@@ -5575,6 +5575,53 @@ async function loadHistoryState(id) {
       }
     }
 
+    // === Force AI Analysis Chat UI refresh after state restoration ===
+    try {
+      const chatSectionEl = document.getElementById('ai-analysis-section');
+      if (chatSectionEl) {
+        chatSectionEl.style.display = 'block';
+      }
+
+      // Normalize state for empty or missing histories
+      if (!window.chatState || !Array.isArray(window.chatState.messages)) {
+        window.chatState = { messages: [], isTyping: false, lastContextRefresh: null };
+      }
+
+      // Preferred path: refresh UI without re-initializing listeners
+      if (typeof window.refreshChatUI === 'function') {
+        window.refreshChatUI();
+      } else {
+        // Fallback: if refresh helper isn't available yet, avoid early-return by re-init once
+        if (chatSectionEl && chatSectionEl.hasAttribute('data-chat-initialized')) {
+          chatSectionEl.removeAttribute('data-chat-initialized');
+        }
+        if (typeof window.initializeChat === 'function') {
+          window.initializeChat();
+        } else {
+          // Minimal fallback: ensure container isn't stale
+          const messagesContainer = document.getElementById('chat-messages');
+          if (messagesContainer) {
+            const msgs = Array.isArray(window.chatState.messages) ? window.chatState.messages : [];
+            messagesContainer.innerHTML = '';
+            if (msgs.length === 0) {
+              messagesContainer.innerHTML = `
+                <div class="welcome-message">
+                  <div class="ai-message">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-content">
+                      <p>Hello! I'm your AI assistant for data analysis. I have access to your current charts, aggregations, and data patterns. Ask me anything about your data!</p>
+                    </div>
+                  </div>
+                </div>
+              `;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Chat UI force-refresh failed:', e);
+    }
+
     // Update UI elements
     $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows from history.`;
     $('#searchInput').value = QUERY;
@@ -7162,6 +7209,24 @@ Please provide a helpful, insightful response based on the above data analysis c
       }, 100);
     }
   }
+
+  // Expose a safe, idempotent UI refresh that bypasses init guard
+  window.refreshChatUI = function refreshChatUI() {
+    try {
+      const chatSection = document.getElementById('ai-analysis-section');
+      if (chatSection) {
+        chatSection.style.display = 'block';
+      }
+      // Ensure state exists
+      if (!window.chatState || !Array.isArray(window.chatState.messages)) {
+        window.chatState = { messages: [], isTyping: false, lastContextRefresh: null };
+      }
+      // Re-render messages from state without re-binding listeners
+      restoreChatMessages();
+    } catch (e) {
+      console.warn('refreshChatUI failed:', e);
+    }
+  };
 
   // Hook into existing data loading to show chat
   const originalRenderAggregates = window.renderAggregates;
