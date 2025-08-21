@@ -3707,6 +3707,30 @@ $('#loadBtn').onclick = async ()=>{
           console.warn('AI Analysis Chat init after manual load failed:', e);
         }
       }, 400);
+    } else if ($('#mode').value === 'ai_agent') {
+      console.log('🎯 Auto-starting AI Agent workflow after manual CSV load...');
+      const btn = document.getElementById('autoBtn');
+      if (btn && typeof btn.click === 'function') {
+        btn.click();
+      } else {
+        renderAggregates();
+      }
+
+      // Ensure AI Analysis Chat is initialized after aggregates render
+      setTimeout(() => {
+        try {
+          if (typeof window.initializeChat === 'function') {
+            if (!window.currentData || window.currentData.length === 0) {
+              window.currentData = ROWS;
+            }
+            const chatSection = document.getElementById('ai-analysis-section');
+            if (chatSection) chatSection.style.display = 'block';
+            window.initializeChat();
+          }
+        } catch (e) {
+          console.warn('AI Analysis Chat init after manual load (AI Agent) failed:', e);
+        }
+      }, 400);
     }
 
   }catch(e){ console.error(e); showToast('Parse error: '+(e?.message||e), 'error'); $('#meta').textContent='Parse failed.'; }
@@ -6146,8 +6170,32 @@ window.addEventListener('message', async (event) => {
               console.warn('AI Analysis Chat init after table_csv processing failed:', e);
             }
           }, 400);
+        } else if ($('#mode').value === 'ai_agent') {
+          console.log('🎯 Auto-starting AI Agent workflow after table_csv load...');
+          const btn = document.getElementById('autoBtn');
+          if (btn && typeof btn.click === 'function') {
+            btn.click();
+          } else {
+            renderAggregates();
+          }
+
+          // Ensure AI Analysis Chat is initialized after aggregates render
+          setTimeout(() => {
+            try {
+              if (typeof window.initializeChat === 'function') {
+                if (!window.currentData || window.currentData.length === 0) {
+                  window.currentData = ROWS;
+                }
+                const chatSection = document.getElementById('ai-analysis-section');
+                if (chatSection) chatSection.style.display = 'block';
+                window.initializeChat();
+              }
+            } catch (e) {
+              console.warn('AI Analysis Chat init after table_csv processing (AI Agent) failed:', e);
+            }
+          }, 400);
         }
-        
+
         console.log('🎉 Successfully processed table data');
         showToast('Table data received and loaded successfully', 'success');
         
