@@ -526,6 +526,7 @@ import { applyMasonryLayout } from './ai_chart_masonry.js';
 import { getMetricPriority, selectBestMetricColumn, pickPrimaryMetric, buildErpPlan } from './ai_chart_erp_metrics.js';
 import { inferType, profile, renderProfile, inferRole, detectTemporalPatterns, detectHierarchicalRelationships } from './ai_chart_profile.js';
 import { parseCsvNumber, isNum, toNum, parseDateSafe } from './ai_chart_utils.js';
+import { groupAgg, bucketDate, normalizeGroupKey, computeChartConfig, ensureChart, renderChartCard, renderAggTable, addMissingDataWarning, canonicalJobKey, deduplicateJobs, nice } from './ai_chart_aggregates.js';
 // Smart default mode selector
 function getDefaultMode() {
   const hasApiKey = isValidApiKey(localStorage.getItem('gemini_api_key'));
@@ -1353,32 +1354,17 @@ function getFormattedDateTime() {
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
-const nice = n => { 
-  if (n==null || isNaN(n)) return ''; 
-  
-  // ERP standard formatting with comma separators and proper decimals
-  const num = Number(n);
-  
-  // For very large numbers, still use abbreviations but with ERP formatting
-  const a = Math.abs(num);
-  if (a >= 1e15) return (num/1e12).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + 'T';
-  if (a >= 1e12) return (num/1e9).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + 'B';
-  
-  // Standard ERP formatting with commas and 2 decimal places
-  return num.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-}
+// NOTE: nice function moved to ai_chart_aggregates.js; formatNumberFull kept here for backwards compatibility
 function formatNumberFull(n) {
   const num = Number(n);
   if (!Number.isFinite(num)) return '0.00';
   return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
+}
 function debounce(fn, ms=250){ let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); }; }
 const debouncedRenderAggregates = debounce(() => { renderAggregates(); }, 300);
 
-/**
- * Creates a canonical job key for deduplication and consistent state management.
- * Normalizes case, whitespace, and handles null/empty values consistently.
- */
+// NOTE: canonicalJobKey and deduplicateJobs functions moved to ai_chart_aggregates.js
+/* 
 function canonicalJobKey(job) {
   const { groupBy, metric, agg, dateBucket } = job;
   
@@ -1394,9 +1380,6 @@ function canonicalJobKey(job) {
   return `${normalizeString(agg)}|${normalizedMetric}|${normalizeString(groupBy)}|${normalizeString(dateBucket)}`;
 }
 
-/**
- * Deduplicates jobs array using canonical keys
- */
 function deduplicateJobs(jobs) {
   if (!Array.isArray(jobs)) return [];
   
@@ -1419,7 +1402,10 @@ function deduplicateJobs(jobs) {
   
   return uniqueJobs;
 }
+*/
 
+// NOTE: addMissingDataWarning function moved to ai_chart_aggregates.js
+/* 
 function addMissingDataWarning(card, aggResult, totalRows, showMissing) {
 
     if (aggResult.missingCount > 0) {
@@ -1450,6 +1436,7 @@ function addMissingDataWarning(card, aggResult, totalRows, showMissing) {
         }
     }
 }
+*/
 
 
 
@@ -2390,6 +2377,8 @@ function autoBucket(rows, dateCol){
 }
 
 /* ========= aggregates ========= */
+// NOTE: Aggregation functions moved to ai_chart_aggregates.js
+/* 
 function bucketDate(d, bucket){
   const t = parseDateSafe(d); if (Number.isNaN(t)) return null;
   const dt = new Date(t);
@@ -2665,8 +2654,11 @@ function groupAgg(rows, groupBy, metric, agg, dateBucket='', filterConfig = { mo
     removedRows
   };
 }
+*/
 
 /* ========= charting (FIXED HEIGHT + SAFE REDRAW + MORE TYPES) ========= */
+// NOTE: Chart functions moved to ai_chart_aggregates.js
+/* 
 const chartRegistry = new WeakMap(); // canvas -> { chart, ro }
 function computeChartConfig(agg, typePref, topN, options = {}){
   const { noAnimation = false } = options;
@@ -2837,6 +2829,10 @@ function ensureChart(canvas, cfg, shouldResize=false){
   }
   return chart;
 }
+*/
+
+// NOTE: renderChartCard and renderAggTable functions moved to ai_chart_aggregates.js
+/* 
 function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=20, titleForFile='chart', options = {}){
   const { noAnimation = false } = options;
   const c = document.createElement('div'); c.className='chart-card';
@@ -3077,7 +3073,8 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
       finalFunction,
       newBucket,
       { mode: currentFilterMode, value: currentFilterValue },
-      !!showMissingFlag
+      !!showMissingFlag,
+      PROFILE
     );
 
     // Update the current card's aggregate data (shared by all charts in this card)
@@ -3126,7 +3123,7 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
       // Re-render table with correct showMissing
       const tableBox = parentCard.querySelector('.table-wrap');
       if (tableBox) {
-        renderAggTable(newAgg, tableBox, 20, !!showMissingFlag);
+        renderAggTable(newAgg, tableBox, 20, !!showMissingFlag, { formatNumberFull });
       }
 
       // Redraw ALL chart cards in this parent (not only the one being edited)
@@ -3186,7 +3183,7 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
   return c;
 }
 
-/* ========= aggregate table (sortable + download) ========= */
+======== aggregate table (sortable + download) =========
 function renderAggTable(agg, container, previewN=10, showMissing = false){
   container.innerHTML = '';
   
@@ -3561,6 +3558,7 @@ function renderAggTable(agg, container, previewN=10, showMissing = false){
   // Initial render
   updateTable();
 }
+*/
 
 /* ========= Manual Mode: Role Editor + Add Aggregate ========= */
 function openRoleEditor(){
@@ -3917,7 +3915,7 @@ async function workerAggregateWithFallback(rows, profile, plan, timeoutMs = 1500
   // Fallback function using existing main-thread logic
   const localAggregate = () => {
     console.log('Executing local fallback for aggregation.');
-    return plan.jobs.map(j => groupAgg(rows, j.groupBy, j.metric, j.agg, j.dateBucket || ''));
+    return plan.jobs.map(j => groupAgg(rows, j.groupBy, j.metric, j.agg, j.dateBucket || '', { mode: 'share', value: 0 }, true, profile));
   };
 
   if (typeof Worker === 'undefined') {
@@ -4248,7 +4246,7 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
         const newAgg = groupAgg(getIncludedRows(), currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
             mode: currentFilterMode,
             value: currentFilterValue
-        }, newShowMissing);
+        }, newShowMissing, PROFILE);
 
         card.dataset.showMissing = String(newShowMissing);
 
@@ -4258,7 +4256,7 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
         addMissingDataWarning(card, newAgg, getIncludedRows().length, newShowMissing);
 
         sub.textContent = `${newAgg.rows.length} groups · ${newAgg.header[1]}`;
-        renderAggTable(newAgg, tableBox, 20, newShowMissing);
+        renderAggTable(newAgg, tableBox, 20, newShowMissing, { formatNumberFull });
 
         chartsContainer.querySelectorAll('.chart-card').forEach(chartCard => {
             const canvas = chartCard.querySelector('canvas');
@@ -4299,21 +4297,27 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     const initialAgg = groupAgg(getIncludedRows(), job.groupBy, job.metric, job.agg, job.dateBucket || '', {
         mode: filterMode,
         value: filterValue
-    }, showMissing);
+    }, showMissing, PROFILE);
     console.timeEnd(`buildAggCard:compute:${card.dataset.canonicalKey}`);
  
     addMissingDataWarning(card, initialAgg, getIncludedRows().length, showMissing);
     sub.textContent = `${initialAgg.rows.length} groups · ${initialAgg.header[1]}`;
  
     console.time(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
-    renderAggTable(initialAgg, tableBox, 20, showMissing);
+    renderAggTable(initialAgg, tableBox, 20, showMissing, { formatNumberFull });
     console.timeEnd(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
  
     // Log chart render start and end times per chart card
     charts.forEach((chartSnap, ci) => {
         const chartLabel = `buildAggCard:renderChart:${card.dataset.canonicalKey}:chart${ci}`;
         console.time(chartLabel);
-        const chartCard = renderChartCard(initialAgg, chartsContainer, chartSnap.type, chartSnap.topN, title.replace(/\s+/g, '_'), { noAnimation });
+        const chartCard = renderChartCard(initialAgg, chartsContainer, chartSnap.type, chartSnap.topN, title.replace(/\s+/g, '_'), { 
+            noAnimation,
+            profile: PROFILE,
+            showToast,
+            applyMasonryLayout,
+            generateExplanation
+        });
         // If renderChartCard returns synchronously, end the timer immediately; otherwise end in ensureChart callbacks
         console.timeEnd(chartLabel);
     });
@@ -6719,7 +6723,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 card.dataset.agg, 
                 card.dataset.dateBucket || '', 
                 { mode: filterMode, value: filterValue }, 
-                showMissing
+                showMissing,
+                PROFILE
               );
             }
           }
