@@ -113,6 +113,19 @@
       </div>
     </div>
   </div>
+  
+  <div class="section" id="ai-todo-list-section" style="display: none;" data-section-id="ai-workflow">
+    <div class="section-header">
+      <h3>AI Task Workflow</h3>
+    </div>
+    <div class="section-content" id="section-content-ai-workflow">
+      <div id="ai-progress-bar-container">
+        <div id="ai-progress-bar"></div>
+      </div>
+      <div id="ai-current-task-details"></div>
+      <ul id="ai-todo-list"></ul>
+    </div>
+  </div>
 
   <div class="section" data-section-id="aggregates">
     <div class="section-header">
@@ -258,18 +271,6 @@
     </div>
     <div class="section-content" id="section-content-schema-info">
       <pre id="schema" class="muted" style="white-space:pre-wrap;margin:0"></pre>
-    </div>
-  </div>
-  <div class="section" id="ai-todo-list-section" style="display: none;" data-section-id="ai-workflow">
-    <div class="section-header">
-      <h3>AI Task Workflow</h3>
-    </div>
-    <div class="section-content" id="section-content-ai-workflow">
-      <div id="ai-progress-bar-container">
-        <div id="ai-progress-bar"></div>
-      </div>
-      <div id="ai-current-task-details"></div>
-      <ul id="ai-todo-list"></ul>
     </div>
   </div>
 
@@ -6915,7 +6916,7 @@ Please provide a helpful, insightful response based on the above data analysis c
 
       // Get API key from settings (using same pattern as existing AI features)
       const apiKey = localStorage.getItem('gemini_api_key');
-      const model = localStorage.getItem('gemini_model') || 'gemini-2.0-flash-exp';
+      const model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
       const baseUrl = localStorage.getItem('gemini_base_url') || 'https://generativelanguage.googleapis.com/v1beta';
       
       console.log('🔍 Chat API Settings:', {
