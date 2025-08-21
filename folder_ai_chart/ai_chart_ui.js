@@ -815,6 +815,7 @@ function forceAutoSave(reason = 'manual-action') {
     console.error('Force save failed:', e);
   }
 }
+window.forceAutoSave = forceAutoSave;
 
 /* ========= state ========= */
 let ROWS=null, PROFILE=null, LAST_PARSE_META=null;

@@ -683,8 +683,10 @@ editBtn.onclick = () => {
     editPanel.style.display = 'block';
     editBtn.textContent = 'Cancel Edit';
 
-    // Sync Date Bucket visibility when opening
+    // Sync Date Bucket visibility when opening + preset current settings
     const gbSel = editPanel.querySelector('#edit-groupby');
+    const metricSel = editPanel.querySelector('#edit-metric');
+    const funcSel = editPanel.querySelector('#edit-function');
     const bucketWrap = editPanel.querySelector('#edit-bucket-wrap');
     const bucketSel = editPanel.querySelector('#edit-bucket');
 
@@ -692,13 +694,81 @@ editBtn.onclick = () => {
       const col = (profile?.columns || []).find(x => x.name === gbSel.value);
       const isDate = col?.type === 'date';
       if (bucketWrap) bucketWrap.style.display = isDate ? '' : 'none';
-      if (!isDate && bucketSel) bucketSel.value = '';
+      if (!isDate) {
+        if (bucketSel) bucketSel.value = '';
+      } else {
+        // Provide a sensible default if none selected yet
+        if (bucketSel && !bucketSel.value) bucketSel.value = 'month';
+      }
     };
 
     if (gbSel && !gbSel._bucketSyncAttached) {
       gbSel.addEventListener('change', syncBucketVisibility);
       gbSel._bucketSyncAttached = true;
     }
+
+    // Prefill presets from current card dataset and agg header
+    const ds = (c.closest('.card') || parentCard)?.dataset || {};
+
+    // Derive groupBy from dataset or header (strip date bucket suffix if present)
+    const gbHeader = agg.header?.[0] || '';
+    const gbFromHeader = gbHeader.replace(/\s*\((day|week|month|quarter|year)\)\s*$/i, '');
+    const presetGroupBy = (ds.groupBy && ds.groupBy.trim()) ? ds.groupBy : gbFromHeader;
+    if (gbSel && presetGroupBy) {
+      gbSel.value = presetGroupBy;
+    }
+
+    // Parse header agg "sum(METRIC)" to get defaults if dataset missing
+    const parseHeaderAgg = (s) => {
+      const m = (s || '').match(/^\s*([a-z_]+)\s*\(\s*(.*?)\s*\)\s*$/i);
+      if (!m) return { agg: '', metric: '' };
+      const aggName = (m[1] || '').toLowerCase();
+      const metricName = (m[2] || '').trim();
+      return { agg: aggName, metric: metricName === '*' ? '' : metricName };
+    };
+    const headerAggText = agg.header?.[1] || '';
+    const parsed = parseHeaderAgg(headerAggText);
+
+    // Metric and function presets
+    const presetMetric = (ds.metric !== undefined ? ds.metric : '') || parsed.metric || '';
+    let presetFn = (ds.agg !== undefined ? ds.agg : '') || parsed.agg || (presetMetric ? 'sum' : 'count');
+
+    // ERP-smart default metric if still empty or not in list
+    if (metricSel && (!presetMetric || !metricSel.querySelector('option[value="' + presetMetric + '"]'))) {
+      const tokens = ['amount','total','price','revenue','sales','cost','value','amt','qty','quantity','net','gross'];
+      const numericCols = (profile?.columns || []).filter(c => c.type === 'number');
+      const smart = numericCols.find(c => {
+        const n = (c.name || '').toLowerCase();
+        return tokens.some(t => n.includes(t));
+      }) || numericCols[0];
+      if (smart) {
+        metricSel.value = smart.name;
+        if (funcSel && (!presetFn || presetFn === 'count')) {
+          presetFn = 'sum';
+        }
+      }
+    } else if (metricSel && presetMetric) {
+      metricSel.value = presetMetric;
+    }
+
+    if (presetMetric && presetFn === 'count') {
+      presetFn = 'sum';
+    }
+    if (funcSel && presetFn) {
+      funcSel.value = presetFn;
+    }
+
+    // Bucket preset: from dataset or from header's "(bucket)"
+    let presetBucket = (ds.dateBucket !== undefined ? ds.dateBucket : '') || '';
+    if (!presetBucket) {
+      const m = gbHeader.match(/\((day|week|month|quarter|year)\)/i);
+      if (m) presetBucket = m[1].toLowerCase();
+    }
+    if (bucketSel && presetBucket && bucketSel.querySelector('option[value="' + presetBucket + '"]')) {
+      bucketSel.value = presetBucket;
+    }
+
+    // Finalize bucket visibility after presets
     syncBucketVisibility();
   } else {
     editPanel.style.display = 'none';
@@ -775,9 +845,11 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   const tableBox = parentCard?.querySelector('.table-wrap');
   if (tableBox) renderAggTable(newAgg, tableBox, 20, !!showMissingFlag, { formatNumberFull });
 
-  // Update card subtext with new metadata
+  // Update card subtext and title with new metadata
   const subEl = parentCard?.querySelector('.card-sub');
   if (subEl) subEl.textContent = `${newAgg.rows.length} groups · ${newAgg.header[1]}`;
+  const titleEl = parentCard?.querySelector('.card-title');
+  if (titleEl) titleEl.textContent = `${newFunction}(${newMetric || '*'}) by ${newGroupBy}`;
 
   // Re-add missing-data warning
   parentCard?.querySelectorAll('.missing-data-warning').forEach(w => w.remove());
@@ -788,6 +860,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   editBtn.textContent = 'Edit';
 
   if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave();
+  if (typeof window !== 'undefined' && typeof window.forceAutoSave === 'function') { try { window.forceAutoSave('edit-apply'); } catch (e) { console.warn('forceAutoSave failed:', e); } }
   if (typeof applyMasonryLayout === 'function') requestAnimationFrame(() => { try { applyMasonryLayout(); } catch {} });
   if (typeof showToast === 'function') showToast('Aggregate updated for this card.', 'success');
 };
