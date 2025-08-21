@@ -5,17 +5,33 @@
 let $;
 let showToast;
 
+export function isValidApiKey(val) {
+    if (val == null) return false;
+    const s = String(val).trim();
+    if (!s) return false;
+    const lower = s.toLowerCase();
+    if (lower === 'null' || lower === 'undefined') return false;
+    if (s.length < 8) return false;
+    return true;
+}
+
+// Ensure display rules use isValidApiKey in downstream modules as well
 export function updateAIFeaturesVisibility() {
     const apiKey = localStorage.getItem('gemini_api_key');
+    const hasValidKey = isValidApiKey(apiKey);
     const aiWorkflowSection = document.getElementById('ai-todo-list-section');
     const aiAnalysisSection = document.getElementById('ai-analysis-section');
+    const aiSummarySection = document.getElementById('ai-summary-section');
 
-    // Toggle AI workflow and analysis sections
+    // Toggle AI workflow, analysis, and summary sections
     if (aiWorkflowSection) {
-        aiWorkflowSection.style.display = apiKey ? 'block' : 'none';
+        aiWorkflowSection.style.display = hasValidKey ? 'block' : 'none';
     }
     if (aiAnalysisSection) {
-        aiAnalysisSection.style.display = apiKey ? 'block' : 'none';
+        aiAnalysisSection.style.display = hasValidKey ? 'block' : 'none';
+    }
+    if (aiSummarySection) {
+        aiSummarySection.style.display = hasValidKey ? 'block' : 'none';
     }
 
     // Toggle "AI Agent" option in main Mode selector
@@ -25,9 +41,9 @@ export function updateAIFeaturesVisibility() {
         aiAgentOption = modeSelect.querySelector('option[value="ai_agent"]');
     }
     if (aiAgentOption) {
-        aiAgentOption.style.display = apiKey ? '' : 'none';
-        // If currently selected but no key, fallback to Auto and trigger change
-        if (!apiKey && modeSelect && modeSelect.value === 'ai_agent') {
+        aiAgentOption.style.display = hasValidKey ? '' : 'none';
+        // If currently selected but no valid key, fallback to Auto and trigger change
+        if (!hasValidKey && modeSelect && modeSelect.value === 'ai_agent') {
             modeSelect.value = 'auto';
             try {
                 modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -42,15 +58,15 @@ export function updateAIFeaturesVisibility() {
         defaultAiOption = defaultModeSelect.querySelector('option[value="ai_agent"]');
     }
     if (defaultAiOption) {
-        defaultAiOption.style.display = apiKey ? '' : 'none';
-        // If preference was ai_agent but key is missing, reset preference to auto
-        if (!apiKey) {
+        defaultAiOption.style.display = hasValidKey ? '' : 'none';
+        // If preference was ai_agent but key is missing/invalid, reset preference to auto
+        if (!hasValidKey) {
             try {
                 if (localStorage.getItem('default_generate_mode') === 'ai_agent') {
                     localStorage.setItem('default_generate_mode', 'auto');
                 }
             } catch {}
-            defaultModeSelect.value = 'auto';
+            if (defaultModeSelect) defaultModeSelect.value = 'auto';
         }
     }
 }
@@ -161,6 +177,7 @@ export function initializeAiSettingsHandlers(dependencies) {
         updateAIFeaturesVisibility();
         // Notify listeners that settings changed (e.g., summary/logic can react)
         try { window.dispatchEvent(new StorageEvent('storage', { key: 'default_generate_mode', newValue: defaultMode })); } catch(e) {}
+        try { document.dispatchEvent(new CustomEvent('apiKeySaved')); } catch(e) {}
     };
 
     $('#clearApiKeyBtn').onclick = () => {
@@ -182,5 +199,6 @@ export function initializeAiSettingsHandlers(dependencies) {
         // Notify listeners that default mode preference was cleared
         try { window.dispatchEvent(new StorageEvent('storage', { key: 'default_generate_mode', newValue: null })); } catch(e) {}
         updateAIFeaturesVisibility();
+        try { document.dispatchEvent(new CustomEvent('apiKeySaved')); } catch(e) {}
     };
 }

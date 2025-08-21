@@ -519,7 +519,7 @@
 <script type="module">
 import * as Store from './ai_chart_store.js';
 import { fetchWithRetry } from './ai_chart_api.js';
-import { initializeAiSettingsHandlers, updateAIFeaturesVisibility } from './ai_chart_ai_settings_handlers.js';
+import { initializeAiSettingsHandlers, updateAIFeaturesVisibility, isValidApiKey } from './ai_chart_ai_settings_handlers.js';
 import { initializeSectionToggles } from './ai_chart_section_toggle_logic.js';
 import { getErpSpecificAutoPlan, getErpMetricPriority, getErpAnalysisPriority } from './ai_chart_erp_logic.js';
 import { applyMasonryLayout } from './ai_chart_masonry.js';
@@ -528,7 +528,7 @@ import { inferType, profile, renderProfile, inferRole, detectTemporalPatterns, d
 import { parseCsvNumber, isNum, toNum, parseDateSafe } from './ai_chart_utils.js';
 // Smart default mode selector
 function getDefaultMode() {
-  const hasApiKey = !!localStorage.getItem('gemini_api_key');
+  const hasApiKey = isValidApiKey(localStorage.getItem('gemini_api_key'));
   const userPreference = localStorage.getItem('default_generate_mode');
   if (hasApiKey && userPreference === 'ai_agent') {
     return 'ai_agent';
@@ -611,8 +611,11 @@ function updateAiTodoList(data) {
     }
 
     const apiKey = localStorage.getItem('gemini_api_key');
-    if (apiKey) {
+    if (isValidApiKey(apiKey)) {
         container.style.display = 'block';
+    } else {
+        container.style.display = 'none';
+        return;
     }
 
     // Special handling for AI Agent mode with empty tasks (loading state)
@@ -3790,7 +3793,7 @@ $('#loadBtn').onclick = async ()=>{
               window.currentData = ROWS;
             }
             const apiKey = localStorage.getItem('gemini_api_key');
-            if (typeof window.initializeChat === 'function' && apiKey) {
+            if (typeof window.initializeChat === 'function' && isValidApiKey(apiKey)) {
                 const chatSection = document.getElementById('ai-analysis-section');
                 if (chatSection) chatSection.style.display = 'block';
                 window.initializeChat();
@@ -3817,7 +3820,7 @@ $('#loadBtn').onclick = async ()=>{
               window.currentData = ROWS;
             }
             const apiKey = localStorage.getItem('gemini_api_key');
-            if (typeof window.initializeChat === 'function' && apiKey) {
+            if (typeof window.initializeChat === 'function' && isValidApiKey(apiKey)) {
                 const chatSection = document.getElementById('ai-analysis-section');
                 if (chatSection) chatSection.style.display = 'block';
                 window.initializeChat();
@@ -4016,8 +4019,8 @@ async function generateExplanation(agg, job, parentCard) {
     const apiKey = localStorage.getItem('gemini_api_key');
     const model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
 
-    // Do not render anything if the API key is missing or empty
-    if (!apiKey || apiKey.trim() === '') {
+    // Do not render anything if the API key is invalid
+    if (!isValidApiKey(apiKey)) {
       const existingExplanation = parentCard.querySelector('.ai-explanation');
       if (existingExplanation) {
         existingExplanation.style.display = 'none';
@@ -4386,12 +4389,12 @@ async function getIntelligentAiAnalysisPlan(context) {
     const apiKey = localStorage.getItem('gemini_api_key');
     const model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
     
-    if (!apiKey || apiKey.trim() === '') {
-        console.log('[Debug] No API key found, falling back to standard auto plan');
+    if (!isValidApiKey(apiKey)) {
+        console.log('[Debug] No valid API key found, falling back to standard auto plan');
         const plan = autoPlan(context.profile, context.includedRows, context.excludedDimensions);
         return {
             tasks: [{
-                description: 'Running standard analysis (no API key provided)',
+                description: 'Running standard analysis (no valid API key provided)',
                 type: 'auto-analysis-fallback'
             }],
             jobs: plan.jobs,
@@ -4641,8 +4644,8 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
 
 async function runAiWorkflow(includedRows, excludedDimensions = []) {
   const apiKey = localStorage.getItem('gemini_api_key');
-  if (!apiKey || apiKey.trim() === '') {
-    console.log('No API key found, skipping AI workflow.');
+  if (!isValidApiKey(apiKey)) {
+    console.log('No valid API key found, skipping AI workflow.');
     // Hide all AI explanation sections if no API key is present
     document.querySelectorAll('.ai-explanation').forEach(el => el.style.display = 'none');
     // Fallback to a default, non-AI plan if necessary
@@ -5096,7 +5099,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         setTimeout(() => {
             try {
                 const apiKey = localStorage.getItem('gemini_api_key');
-                if (typeof window.initializeChat === 'function' && window.currentData && window.currentData.length > 0 && apiKey) {
+                if (typeof window.initializeChat === 'function' && window.currentData && window.currentData.length > 0 && isValidApiKey(apiKey)) {
                     const chatSection = document.getElementById('ai-analysis-section');
                     if (chatSection) {
                         chatSection.style.display = 'block';
@@ -5867,7 +5870,8 @@ async function loadHistoryState(id) {
       });
       
       const chatSection = document.getElementById('ai-analysis-section');
-      if (chatSection && window.currentData && window.currentData.length > 0) {
+      const apiKey = localStorage.getItem('gemini_api_key');
+      if (chatSection && window.currentData && window.currentData.length > 0 && isValidApiKey(apiKey)) {
         chatSection.style.display = 'block';
         
         // Try to initialize chat - check if function exists in scope
@@ -6386,7 +6390,7 @@ function checkAndGenerateAISummary() {
   console.log('🤖 aiSummarySection element:', aiSummarySection);
   
   // Only show AI Summary section if API key is present
-  if (apiKey && apiKey.trim()) {
+  if (isValidApiKey(apiKey)) {
     console.log('🤖 API key detected, showing AI Summary section');
     if (aiSummarySection) {
       aiSummarySection.style.display = 'block';
@@ -7119,7 +7123,7 @@ Please provide a helpful, insightful response based on the above data analysis c
         apiKeyLength: apiKey ? apiKey.length : 0
       });
       
-      if (!apiKey || apiKey.trim() === '') {
+      if (!isValidApiKey(apiKey)) {
         console.log('❌ No API key found in settings');
         hideTypingIndicator();
         addChatMessage("Please set your API key in AI Settings first.", false);
@@ -7176,7 +7180,7 @@ Please provide a helpful, insightful response based on the above data analysis c
 
     // Show chat section when data is loaded
     const apiKey = localStorage.getItem('gemini_api_key');
-    if (window.currentData && window.currentData.length > 0 && apiKey) {
+    if (window.currentData && window.currentData.length > 0 && isValidApiKey(apiKey)) {
       chatSection.style.display = 'block';
       console.log('📱 AI Analysis Chat section shown');
     } else {
@@ -7313,8 +7317,11 @@ Please provide a helpful, insightful response based on the above data analysis c
   window.refreshChatUI = function refreshChatUI() {
     try {
       const chatSection = document.getElementById('ai-analysis-section');
-      if (chatSection) {
+      const apiKey = localStorage.getItem('gemini_api_key');
+      if (chatSection && window.currentData && window.currentData.length > 0 && isValidApiKey(apiKey)) {
         chatSection.style.display = 'block';
+      } else if (chatSection) {
+        chatSection.style.display = 'none';
       }
       // Ensure state exists
       if (!window.chatState || !Array.isArray(window.chatState.messages)) {
