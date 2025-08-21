@@ -185,11 +185,22 @@ function bucketDate(d, bucket){
   if (bucket==='quarter') return `${y}-Q${Math.floor((m-1)/3)+1}`;
   if (bucket==='month') return `${y}-${String(m).padStart(2,'0')}`;
   if (bucket==='week'){
-    const date = new Date(Date.UTC(y, dt.getUTCMonth(), day));
+    // Calculate ISO 8601 week number
+    // Create a new date for the given date (to avoid modifying the original)
+    const date = new Date(Date.UTC(y, m-1, day));
+    
+    // Set to nearest Thursday (current date + 4 - current day number)
+    // Make Sunday's day number 7 (convert Sunday from 0 to 7)
     const dayNum = date.getUTCDay() || 7;
     date.setUTCDate(date.getUTCDate() + (4 - dayNum));
+    
+    // Get first day of year
     const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    
+    // Calculate full weeks to nearest Thursday
     const weekNum = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+    
+    // Return week number in format YYYY-WXX
     return `${date.getUTCFullYear()}-W${String(weekNum).padStart(2,'0')}`;
   }
   return `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`; // day
