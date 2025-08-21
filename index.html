@@ -1472,6 +1472,20 @@ const debouncedAutoSave = debounce(() => {
   saveCurrentStateToHistory(currentName, false); // false = update existing
 }, 1500);
 
+function forceAutoSave(reason = 'manual-action') {
+  try {
+    if (!window.currentHistoryId || !ROWS) {
+      console.log(`❌ Force save skipped (${reason}): missing currentHistoryId=${!!window.currentHistoryId} or ROWS=${!!ROWS}`);
+      return;
+    }
+    const li = document.querySelector('#history-list .history-item[data-id="' + window.currentHistoryId + '"] .name');
+    const currentName = li?.textContent || 'current report';
+    console.log(`💾 Force-saving (${reason}) "\${currentName}"...`);
+    saveCurrentStateToHistory(currentName, false);
+  } catch (e) {
+    console.error('Force save failed:', e);
+  }
+}
 
 /* ========= state ========= */
 let ROWS=null, PROFILE=null, LAST_PARSE_META=null;
@@ -3691,6 +3705,7 @@ $('#addAggConfirm').onclick = ()=>{
           applyMasonryLayout();
           showToast('New aggregate added.', 'success');
           debouncedAutoSave();
+          forceAutoSave('add-aggregate');
         } catch (e) {
           console.error('Failed to build manual aggregate card:', e);
           showToast('Failed to add aggregate: ' + (e?.message || e), 'error');
@@ -3701,7 +3716,8 @@ $('#addAggConfirm').onclick = ()=>{
     // For non-manual modes, force a render even if a workflow is running
     renderAggregates(null, [], 0, true);
     showToast('New aggregate added.', 'success');
-    debouncedAutoSave();
+          debouncedAutoSave();
+          forceAutoSave('add-aggregate');
   }
 };
 
