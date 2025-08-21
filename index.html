@@ -2825,7 +2825,7 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
     // Locate containers
     const chartCard = c;
     const chartsContainer = chartCard.parentElement;
-    const parentCard = chartsContainer?.parentElement;
+    const parentCard = chartsContainer?.parentElement?.parentElement; // Go up to the main card (not cardContent)
 
     // Read current filter + missing settings from the card
     const currentFilterValue = Number(parentCard?.querySelector('.filter-input')?.value || 0);
@@ -2850,8 +2850,9 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
     // Update the header display for this chart card
     left.textContent = `Chart for: ${newAgg.header[1]} by ${newAgg.header[0]}`;
 
-    if (parentCard) {
+    if (parentCard && parentCard.classList.contains('card')) {
       // Persist job definition so snapshots capture this edit
+      console.log('🔧 Updating main card dataset with manual edits:', { newGroupBy, newMetric, finalFunction, newBucket });
       parentCard.dataset.groupBy = newGroupBy || '';
       parentCard.dataset.metric = newMetric || '';
       parentCard.dataset.agg = finalFunction || '';
@@ -2908,18 +2909,25 @@ function renderChartCard(agg, chartsContainer, defaultType='auto', defaultTopN=2
       requestAnimationFrame(() => {
         try { applyMasonryLayout(); } catch {}
       });
+    } else {
+      console.error('❌ Could not find parent card for dataset update. DOM structure:', {
+        chartCard, chartsContainer, parentCard,
+        parentCardClasses: parentCard?.className
+      });
     }
 
     // Regenerate AI explanation for this card with the updated config (if API key available)
-    try {
-      await generateExplanation(newAgg, {
-        groupBy: newGroupBy || '',
-        metric: newMetric,
-        agg: finalFunction || 'sum',
-        dateBucket: newBucket || ''
-      }, parentCard);
-    } catch (e) {
-      console.warn('Failed to regenerate explanation after edit apply:', e);
+    if (parentCard) {
+      try {
+        await generateExplanation(newAgg, {
+          groupBy: newGroupBy || '',
+          metric: newMetric,
+          agg: finalFunction || 'sum',
+          dateBucket: newBucket || ''
+        }, parentCard);
+      } catch (e) {
+        console.warn('Failed to regenerate explanation after edit apply:', e);
+      }
     }
 
     // Hide edit panel
@@ -3867,7 +3875,20 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
         const currentFilterValue = Number(card.querySelector('.filter-input')?.value || 0);
         const currentFilterMode = card.querySelector('.filter-mode-select')?.value || 'share';
 
-        const newAgg = groupAgg(getIncludedRows(), job.groupBy, job.metric, job.agg, job.dateBucket || '', {
+        // Read current settings from card dataset (which may have been manually edited)
+        // Fall back to original job settings if not found
+        const currentGroupBy = card.dataset.groupBy || job.groupBy;
+        const currentMetric = card.dataset.metric || job.metric;
+        const currentAgg = card.dataset.agg || job.agg;
+        const currentDateBucket = card.dataset.dateBucket || job.dateBucket || '';
+        
+        console.log('🔄 reRenderCard using settings:', { 
+            currentGroupBy, currentMetric, currentAgg, currentDateBucket,
+            fromDataset: { groupBy: card.dataset.groupBy, metric: card.dataset.metric, agg: card.dataset.agg },
+            originalJob: { groupBy: job.groupBy, metric: job.metric, agg: job.agg }
+        });
+
+        const newAgg = groupAgg(getIncludedRows(), currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
             mode: currentFilterMode,
             value: currentFilterValue
         }, newShowMissing);
