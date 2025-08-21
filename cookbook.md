@@ -30,7 +30,7 @@ The application supports loading CSV or TXT files from your local system.
 
 **Code Reference:**
 *   [`parseCSV()`](fr_ai_chart.cfm:2083) function in `fr_ai_chart.cfm`
-*   [`parser.worker.js`](parser.worker.js) for background parsing.
+*   [`ai_chart_parser_worker.js`](ai_chart_parser_worker.js) for background parsing.
 
 ### 3.2. Data Profiling
 
@@ -270,7 +270,7 @@ The `inc_report_main_heading.cfm` file, typically used for ERP reports, includes
 
 ### 4.3. Performance Optimization
 
-*   **Web Workers (`parser.worker.js`)**: Heavy computational tasks like CSV parsing and data aggregation are offloaded to a Web Worker. This prevents the main browser thread from freezing, ensuring a smooth user experience even with large datasets.
+*   **Web Workers (`ai_chart_parser_worker.js`)**: Heavy computational tasks like CSV parsing and data aggregation are offloaded to a Web Worker. This prevents the main browser thread from freezing, ensuring a smooth user experience even with large datasets.
 *   **Debouncing**: Input events (like search and auto-save) are debounced to limit the frequency of expensive operations.
 *   **Chart.js Optimizations**: Uses `update('none')` for snappier redraws without animation and `decimation` for line charts with many points.
 *   **Masonry Layout**: Dynamically adjusts card heights in the "Aggregates" grid for optimal visual presentation.

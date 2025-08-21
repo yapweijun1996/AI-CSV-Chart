@@ -65,7 +65,7 @@ This section explains the project architecture, data flow, and practical impleme
 ### High-Level Data Flow (steps + code pointers)
 1. File upload → parsing
    - UI: [`index.html`](index.html:1) handles file selection, parsing options, and event wiring directly in a module script.
-   - Worker: [`parser.worker.js`](parser.worker.js:1) (PapaParse-backed) streams rows to the main thread; the UI falls back to main-thread parsing if the worker is unavailable.
+   - Worker: [`ai_chart_parser_worker.js`](ai_chart_parser_worker.js:1) (PapaParse-backed) streams rows to the main thread; the UI falls back to main-thread parsing if the worker is unavailable.
    - Storage: parsed rows are written to IndexedDB via [`ai_chart_store.js`](ai_chart_store.js:1).
 
 2. Profiling → plan generation
@@ -83,7 +83,7 @@ This section explains the project architecture, data flow, and practical impleme
 
 ### File Responsibility Reference
 - [`index.html`](index.html:1) — Main app module: UI wiring, parsing/aggregation orchestration, chart/table rendering, AI chat/summary hooks.
-- [`parser.worker.js`](parser.worker.js:1) — Background CSV parsing worker (PapaParse) with streaming/progress and fallback logic.
+- [`ai_chart_parser_worker.js`](ai_chart_parser_worker.js:1) — Background CSV parsing worker (PapaParse) with streaming/progress and fallback logic.
 - [`ai_chart_store.js`](ai_chart_store.js:1) — IndexedDB abstraction (save/load sessions, chunked dataset storage).
 - [`ai_chart_profile.js`](ai_chart_profile.js:1) — Data profiling heuristics (infer types/roles, temporal/hierarchy detection).
 - [`ai_chart_erp_logic.js`](ai_chart_erp_logic.js:1) — ERP-specific analysis heuristics and prioritized plan hints.
