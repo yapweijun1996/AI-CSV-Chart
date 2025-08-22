@@ -966,8 +966,14 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
  * @param {Object} options - Additional options and formatters
  */
 export function renderAggTable(agg, container, previewN = 10, showMissing = false, options = {}) {
-  const { formatNumberFull = formatNumberFull } = options;
-  
+  // Avoid shadowing the module-scoped formatNumberFull; safely pick a formatter if provided
+  const fmtFull = (options && typeof options.formatNumberFull === 'function')
+    ? options.formatNumberFull
+    : (n => {
+        if (typeof n === 'number' && Number.isFinite(n)) return n.toLocaleString();
+        return String(n ?? '');
+      });
+
   container.innerHTML = '';
   
   // State variables for this table
@@ -1160,7 +1166,7 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
       row.forEach((cell, i) => {
         const td = document.createElement('td');
         if (i === 1 && typeof cell === 'number') {
-          td.textContent = formatNumberFull(cell);
+          td.textContent = fmtFull(cell);
         } else {
           td.textContent = String(cell ?? '');
         }
@@ -1168,6 +1174,66 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
       });
       tbody.appendChild(tr);
     });
+    
+    // Populate tfoot with multi-row summary (visible, post-minGroupShare, pre-filter, removed, missing, total records, raw data sum)
+    tfoot.innerHTML = '';
+    (function buildFooter() {
+      const metricColIdx = 1; // [group, metric]
+      const toNumber = (x) => {
+        const n = toNum(x);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const fmt = (n) => (typeof n === 'number' ? fmtFull(n) : String(n ?? ''));
+
+      // 1) Σ visible (table filter): sum over filteredRows (after table search filter)
+      const visibleSum = filteredRows.reduce((a, r) => a + toNumber(r[metricColIdx]), 0);
+
+      // 2) Σ table (post-minGroupShare): sum over agg.rows (after minGroupShare/value filter but before table search)
+      const postFilterSum = (agg.rows || []).reduce((a, r) => a + toNumber(r[metricColIdx]), 0);
+
+      // 3) Σ total (pre-filter): sum before minGroupShare/value filter (from groupAgg)
+      const preFilterSum = Number.isFinite(agg.totalSum) ? agg.totalSum : postFilterSum;
+
+      // 4) Removed by minGroupShare: sum + count of groups removed by minGroupShare/value
+      const removedRows = Array.isArray(agg.removedRows) ? agg.removedRows : [];
+      const removedSum = removedRows.reduce((a, r) => a + toNumber(r[metricColIdx]), 0);
+      const removedCount = removedRows.length;
+
+      // 5) Missing (group key): show whether excluded or included; use computed missingSum from groupAgg
+      const missingLabel = `Missing (group key) ${showMissing ? '(Included)' : '(Excluded)'}`;
+      const missingSum = Number.isFinite(agg.missingSum) ? agg.missingSum : 0;
+
+      // 6) Σ Total Record: raw rows count passed to groupAgg (after row-inclusion)
+      const totalRecords = Number.isFinite(agg.rawRowsCount) ? agg.rawRowsCount : 0;
+
+      // 7) Raw Data Sum (pre-aggregation): metric sum from raw rows before grouping
+      const rawDataSum = Number.isFinite(agg.rawDataSum) ? agg.rawDataSum : 0;
+
+      const rows = [
+        ['Σ visible (table filter)', fmt(visibleSum)],
+        ['Σ table (post-minGroupShare)', fmt(postFilterSum)],
+        ['Σ total (pre-filter)', fmt(preFilterSum)],
+        ['Removed by minGroupShare', `${fmt(removedSum)} (${removedCount} ${removedCount === 1 ? 'group' : 'groups'})`],
+        [missingLabel, fmt(missingSum)],
+        ['Σ Total Record', (totalRecords).toLocaleString()],
+        ['Raw Data Sum (pre-aggregation)', fmt(rawDataSum)]
+      ];
+
+      for (const [label, val] of rows) {
+        const tr = document.createElement('tr');
+
+        const tdLabel = document.createElement('td');
+        tdLabel.className = 'footer-label';
+        tdLabel.textContent = label;
+        tr.appendChild(tdLabel);
+
+        const tdValue = document.createElement('td');
+        tdValue.textContent = String(val);
+        tr.appendChild(tdValue);
+
+        tfoot.appendChild(tr);
+      }
+    })();
     
     // Update pager
     pageInfo.textContent = rowsPerPage === 0 
