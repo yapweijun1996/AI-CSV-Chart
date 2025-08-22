@@ -4204,7 +4204,7 @@ Provide a structured executive response that includes:
 5. **Recommendations** — prioritized actions or further analyses.  
 
 Format:
-- 2–4 short, structured paragraphs (executive briefing style).  
+- 10-20 short, structured paragraphs (executive briefing style).  
 - Use markdown for readability.  
 - Quote specific numbers when possible.  
 - Keep the focus on decision-making impact, not raw technical details.  

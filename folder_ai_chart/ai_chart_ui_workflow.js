@@ -967,7 +967,7 @@ Tone:
 - Polished: write in a business briefing style, as if preparing notes for a board meeting.
 
 Task:
-Review the aggregated business data and provide a summary in 2–4 short, well-structured paragraphs. 
+Review the aggregated business data and provide a summary in 3-8 short, well-structured paragraphs. 
 Your explanation must include:
 1. ERP Perspective — operational patterns (inventory, supply chain, finance) and their business impact.  
 2. CRM Perspective — customer trends (sales, retention, engagement) and notable anomalies.  
@@ -1186,7 +1186,7 @@ Based on the following ${totalCards} data visualization(s) and their insights:
 
 ${cardSummaries}
 
-Provide a comprehensive executive summary (2–4 short, structured paragraphs) that includes:  
+Provide a comprehensive executive summary (3-8 short, structured paragraphs) that includes:  
 1. **Key Findings** — most important insights and trends.  
 2. **Data Overview** — scope and nature of the analysis (ERP, CRM, or operational context).  
 3. **Notable Patterns** — correlations, anomalies, or emerging trends.  
