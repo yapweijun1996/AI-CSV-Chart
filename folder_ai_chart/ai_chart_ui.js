@@ -20,6 +20,7 @@ function getDefaultMode() {
 }
 import { showToast } from './ai_chart_toast_system.js';
 import { AITaskManager, createWorkflowManager } from './ai_chart_task_manager.js';
+import { initWorkflowUI, runAiWorkflow, generateExplanation, checkAndGenerateAISummary, renderExplanationCard } from './ai_chart_ui_workflow.js';
 /* ========= utils ========= */
 const $ = s => document.querySelector(s);
 const stripBOM = s => (s && s.charCodeAt(0) === 0xFEFF) ? s.slice(1) : s;
@@ -513,175 +514,10 @@ function updateAiTodoList(data) {
 }
 
 // Subscribe the UI update function to the manager
-WorkflowManager.subscribe(updateAiTodoList);
-
-// Add comprehensive CSS override to defeat the problematic hiding rules
-if (!document.getElementById('ai-todo-list-override-styles')) {
-    const styleOverride = document.createElement('style');
-    styleOverride.id = 'ai-todo-list-override-styles';
-    styleOverride.innerHTML = `
-        /* Override problematic CSS rules with highest specificity */
-        #ai-todo-list, 
-        #ai-todo-list li, 
-        #ai-todo-list .task-item,
-        #ai-todo-list .task-group-header,
-        #ai-todo-list .task-completed,
-        #ai-todo-list .task-pending,
-        #ai-todo-list .task-in-progress,
-        #ai-todo-list .task-type-chart-generation,
-        #ai-todo-list .task-type-ai-explanation,
-        #ai-todo-list .task-type-workflow-completion,
-        .workflow-status .running-status,
-        .workflow-status .running-status .progress-indicators,
-        .workflow-status .running-status .action-buttons,
-        .workflow-status .running-status .running-info .task-header,
-        .workflow-status .running-status .running-info .task-submessage,
-        .workflow-status .running-status .running-info .time-display,
-        .running-status,
-        .running-info,
-        .task-header,
-        .task-submessage,
-        .time-display,
-        .progress-indicators,
-        .action-buttons {
-            display: list-item !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            height: auto !important;
-            overflow: visible !important;
-        }
-        
-        #ai-todo-list {
-            display: block !important;
-            list-style: none !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        
-        #ai-todo-list .task-group-header {
-            font-weight: bold !important;
-            color: #666 !important;
-            margin-top: 12px !important;
-            margin-bottom: 4px !important;
-            padding: 4px 0 !important;
-            background: #f5f5f5 !important;
-            border-radius: 4px !important;
-        }
-        
-        #ai-todo-list .task-item {
-            border: 1px solid #e1e5e9 !important;
-            border-radius: 6px !important;
-            margin-bottom: 8px !important;
-            padding: 12px !important;
-            background: #fff !important;
-        }
-        
-        #ai-todo-list .task-content {
-            display: flex !important;
-            align-items: flex-start !important;
-            gap: 12px !important;
-        }
-        
-        #ai-todo-list .task-icon {
-            font-size: 16px !important;
-            line-height: 1 !important;
-        }
-        
-        #ai-todo-list .task-info {
-            flex: 1 !important;
-        }
-        
-        #ai-todo-list .task-description {
-            font-weight: 500 !important;
-            color: #24292f !important;
-            margin-bottom: 4px !important;
-        }
-        
-        #ai-todo-list .task-message {
-            color: #656d76 !important;
-            font-size: 14px !important;
-            margin-bottom: 4px !important;
-        }
-        
-        #ai-todo-list .task-timestamp {
-            color: #656d76 !important;
-            font-size: 12px !important;
-        }
-    `;
-    document.head.appendChild(styleOverride);
-    console.log('🎨 Added comprehensive CSS override styles for AI todo list');
-}
-
-// Event delegation for WorkflowManager buttons to prevent "undefined" errors
-document.addEventListener('click', (e) => {
-    const action = e.target.dataset.action;
-    if (!action) return;
-    
-    try {
-        switch (action) {
-            case 'retry':
-                // Disable the button to prevent multiple clicks
-                e.target.disabled = true;
-                e.target.textContent = 'Retrying...';
-                renderAggregates();
-                // Re-enable button after a delay
-                setTimeout(() => {
-                    e.target.disabled = false;
-                    e.target.textContent = 'Retry Analysis';
-                }, 2000);
-                break;
-            case 'restart':
-                console.log('🔄 Restarting workflow...');
-                // Disable the button to prevent multiple clicks
-                e.target.disabled = true;
-                e.target.textContent = 'Restarting...';
-                renderAggregates();
-                // Re-enable button after a delay
-                setTimeout(() => {
-                    e.target.disabled = false;
-                    e.target.textContent = 'Restart Analysis';
-                }, 2000);
-                break;
-            case 'reset-restart':
-                WorkflowManager.reset();
-                WorkflowManager.start();
-                break;
-            case 'cancel':
-                workflowTimer.stop();
-                WorkflowManager.cancel();
-                break;
-            case 'pause':
-                workflowTimer.stop();
-                WorkflowManager.pause();
-                showToast('Analysis paused', 'info');
-                break;
-            case 'resume':
-                workflowTimer.start();
-                WorkflowManager.resume();
-                showToast('Analysis resumed', 'info');
-                break;
-            case 'restart':
-                workflowTimer.reset();
-                renderAggregates();
-                WorkflowManager.start();
-                workflowTimer.start();
-                break;
-        }
-    } catch (error) {
-        console.error('WorkflowManager action failed:', error);
-        showToast?.('Action failed: ' + error.message, 'error');
-    }
-});
 
 
-// Inject enhanced styles
-if (!document.querySelector('#ai-workflow-enhanced-styles')) {
-    const link = document.createElement('link');
-    link.id = 'ai-workflow-enhanced-styles';
-    link.rel = 'stylesheet';
-    link.href = new URL('./ai_chart_workflow.css', import.meta.url).href;
-    document.head.appendChild(link);
-}
+
+
 
 function getFormattedDateTime() {
   const now = new Date();
@@ -816,6 +652,8 @@ function forceAutoSave(reason = 'manual-action') {
   }
 }
 window.forceAutoSave = forceAutoSave;
+window.debouncedAutoSave = debouncedAutoSave;
+window.getAiAnalysisPlan = getAiAnalysisPlan;
 
 /* ========= state ========= */
 let ROWS=null, PROFILE=null, LAST_PARSE_META=null;
@@ -1580,7 +1418,7 @@ $('#loadBtn').onclick = async ()=>{
     if(!data.length) throw new Error('No rows detected (check delimiter/header).');
     ROWS=data; window.currentData = data; DATA_COLUMNS = Object.keys(ROWS[0] || {});
     const dateFormat = $('#dateFormat').value;
-    PROFILE=profile(ROWS, dateFormat); renderProfile(PROFILE, LAST_PARSE_META);
+    PROFILE=profile(ROWS, dateFormat); window.PROFILE = PROFILE; renderProfile(PROFILE, LAST_PARSE_META);
 
     // Coerce numeric columns into numbers to avoid leftover leading-apostrophes in strings
     if (PROFILE && PROFILE.columns) {
@@ -1695,7 +1533,7 @@ $('#mode').addEventListener('change', e=>{ switchMode(e.target.value); renderAgg
 $('#dateFormat').addEventListener('change', ()=>{
   if (ROWS) {
     const dateFormat = $('#dateFormat').value;
-    PROFILE = profile(ROWS, dateFormat);
+    PROFILE = profile(ROWS, dateFormat); window.PROFILE = PROFILE;
     renderProfile(PROFILE, LAST_PARSE_META);
     renderAggregates();
     showToast(`Date format changed to ${dateFormat}. Re-profiling data.`, 'info');
@@ -1759,129 +1597,6 @@ $('#autoBtn').onclick = () => {
 };
 
 
-function renderExplanationCard(parentCard, title, contentHTML) {
-  const explanationContainer = document.createElement('div');
-  explanationContainer.className = 'ai-explanation';
-  explanationContainer.style.borderTop = '1px solid #eee';
-
-  const head = document.createElement('div');
-  head.className = 'card-head';
-  
-  const h = document.createElement('h4');
-  h.className = 'card-title';
-  h.textContent = title;
-  
-  const regenerateBtn = document.createElement('button');
-  regenerateBtn.textContent = 'Regenerate';
-  regenerateBtn.className = 'regenerate-btn';
-
-  head.appendChild(h);
-  head.appendChild(regenerateBtn);
-  explanationContainer.appendChild(head);
-
-  const contentEl = document.createElement('div');
-  contentEl.className = 'ai-explanation-content';
-  contentEl.style.padding = '16px';
-  contentEl.innerHTML = contentHTML;
-  explanationContainer.appendChild(contentEl);
-
-  // Prefer a stable slot inside card-content so re-rendering the table doesn't remove the explanation
-  const cardContent = parentCard.querySelector('.card-content');
-  let explanationSlot = parentCard.querySelector('.explanation-slot');
-  if (!explanationSlot && cardContent) {
-    explanationSlot = document.createElement('div');
-    explanationSlot.className = 'explanation-slot';
-    cardContent.appendChild(explanationSlot);
-  }
-  (explanationSlot || cardContent || parentCard).appendChild(explanationContainer);
-  
-  return { explanationContainer, contentEl, regenerateBtn };
-}
-
-async function generateExplanation(agg, job, parentCard) {
-    const apiKey = localStorage.getItem('gemini_api_key');
-    const model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
-
-    // Do not render anything if the API key is invalid
-    if (!isValidApiKey(apiKey)) {
-      const existingExplanation = parentCard.querySelector('.ai-explanation');
-      if (existingExplanation) {
-        existingExplanation.style.display = 'none';
-      }
-      return;
-    }
- 
-    // Render/replace explanation container first
-    const existingExplanation = parentCard.querySelector('.ai-explanation');
-    if (existingExplanation) {
-      existingExplanation.remove();
-    }
- 
-    const title = `AI Explanation for ${agg.header[1]} by ${agg.header[0]}`;
-    const loaderHTML = '<p>Generating explanation...</p>';
-    const { contentEl, regenerateBtn } = renderExplanationCard(parentCard, title, loaderHTML);
- 
-    regenerateBtn.onclick = () => {
-      contentEl.innerHTML = loaderHTML;
-      regenerateBtn.disabled = true;
-      generateExplanation(agg, job, parentCard);
-    };
- 
-    const timingLabel = `generateExplanation:${parentCard.dataset.canonicalKey || Math.random().toString(36).slice(2)}:${Date.now()}`;
-    console.time(timingLabel);
-    console.log(`⏱ generateExplanation start: ${timingLabel}`);
-    try {
-      const context = {
-        agg,
-        job,
-        profile: PROFILE,
-        rows: ROWS.slice(0, 5)
-      };
- 
-      const prompt = `
-        You are a data analyst. Explain the following data aggregation.
-        Provide a short explanation (2-4 paragraphs) describing what the aggregate shows, notable anomalies, and suggested follow-up analyses.
- 
-        Context:
-        ${JSON.stringify(context, null, 2)}
-      `;
- 
-      const explanation = await fetchWithRetry(apiKey, model, prompt, showToast);
-      contentEl.innerHTML = marked.parse(explanation);
-      parentCard.dataset.explanationMarkdown = explanation; // Store raw explanation
- 
-      // Save explanation to history
-      if (window.currentHistoryId) {
-        const historyItem = await Store.getHistory(window.currentHistoryId);
-        if (historyItem && historyItem.uiSnapshot && historyItem.uiSnapshot.charts) {
-          const chartSnapshot = historyItem.uiSnapshot.charts.find(c =>
-            c.cardJobKey &&
-            c.cardJobKey.groupBy === job.groupBy &&
-            c.cardJobKey.metric === job.metric &&
-            c.cardJobKey.agg === job.agg &&
-            c.cardJobKey.dateBucket === job.dateBucket
-          );
-          if (chartSnapshot) {
-            chartSnapshot.explanation = explanation;
-            await Store.updateHistory(window.currentHistoryId, { uiSnapshot: historyItem.uiSnapshot });
-          }
-        }
-      }
-      console.timeEnd(timingLabel);
-      console.log(`⏱ generateExplanation end: ${timingLabel}`);
-      
-      // Auto-save after explanation is successfully generated
-      console.log(`🔄 Triggering auto-save after explanation completion...`);
-      debouncedAutoSave();
-    } catch (error) {
-      console.timeEnd(timingLabel);
-      console.error(`⏱ generateExplanation error (${timingLabel}):`, error);
-      contentEl.innerHTML = `<p style="color: red;">Error generating explanation: ${error.message}</p>`;
-      showToast(`AI Error: ${error.message}`, 'error');
-    } finally {
-      regenerateBtn.disabled = false;
-    }
-  }
 
 async function buildAggCard(job, cardState = {}, sessionId = null, options = {}) {
     const {
@@ -2431,159 +2146,7 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
     }
 }
 
-async function runAiWorkflow(includedRows, excludedDimensions = []) {
-  const apiKey = localStorage.getItem('gemini_api_key');
-  if (!isValidApiKey(apiKey)) {
-    console.log('No valid API key found, skipping AI workflow.');
-    // Hide all AI explanation sections if no API key is present
-    document.querySelectorAll('.ai-explanation').forEach(el => el.style.display = 'none');
-    // Fallback to a default, non-AI plan if necessary
-    // Initialize workflow even for non-AI fallback
-    WorkflowManager.reset(MODE);
-    WorkflowManager.start();
-    workflowTimer.start();
-    
-    WorkflowManager.completeTask('init');
-    await new Promise(resolve => setTimeout(resolve, 50));
-    
-    const plan = autoPlan(PROFILE, includedRows, excludedDimensions);
-    WorkflowManager.completeTask('analysis', 'Using non-AI fallback.');
-    WorkflowManager.completeTask('ai-generation', 'Using automatic plan generation.');
-    return plan;
-  } else {
-    WorkflowManager.reset(MODE);
-    WorkflowManager.start();
-    workflowTimer.start();
-    
-    try {
-        // For AI Agent mode, skip legacy init completion - tasks will be loaded dynamically
-        if (MODE !== 'ai_agent') {
-            WorkflowManager.completeTask('init');
-        }
-        
-        await new Promise(resolve => setTimeout(resolve, 50)); // Brief pause for UI update
-        
-        let plan;
-        if (MODE === 'manual') {
-            plan = MANUAL_JOBS.length ? { jobs: MANUAL_JOBS.slice(0, 10) } : planFromManualRoles(PROFILE);
-            WorkflowManager.completeTask('analysis', 'Using manual roles.');
-            WorkflowManager.completeTask('config');
-        } else if (MODE === 'ai_agent') {
-            const context = {
-                profile: PROFILE,
-                includedRows: includedRows.slice(0, 5), // Sample rows
-                excludedDimensions,
-                maxCharts: 10
-            };
-            
-            // ✅ IMMEDIATE UI FEEDBACK: Show AI Agent is starting before API call
-            console.log('🚀 AI Agent starting - showing immediate UI feedback');
-            const container = document.getElementById('ai-todo-list-section');
-            const todoList = document.getElementById('ai-todo-list');
-            const progressBar = document.getElementById('ai-progress-bar');
-            const currentTaskDetails = document.getElementById('ai-current-task-details');
-            
-            if (container && todoList && progressBar && currentTaskDetails) {
-                // Force show the workflow section immediately
-                container.style.display = 'block';
-                
-                // Show starting state
-                progressBar.style.width = '5%';
-                progressBar.setAttribute('aria-valuenow', 5);
-                progressBar.className = 'progress-active';
-                
-                currentTaskDetails.innerHTML = `
-                    <div class="current-task-info">
-                        <div class="task-spinner">🤖</div>
-                        <div class="task-description">AI Agent is starting intelligent analysis...</div>
-                        <div class="task-timing">Preparing to call Gemini API</div>
-                    </div>
-                `;
-                
-                // Override the CSS !important rules that hide the todo list
-                todoList.style.setProperty('display', 'block', 'important');
-                todoList.style.setProperty('visibility', 'visible', 'important');
-                todoList.style.setProperty('opacity', '1', 'important');
-                todoList.style.setProperty('height', 'auto', 'important');
-                todoList.style.setProperty('overflow', 'visible', 'important');
-                
-                todoList.innerHTML = `
-                    <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
-                        <div class="task-content">
-                            <span class="task-icon in-progress">🚀</span>
-                            <div class="task-info">
-                                <div class="task-description">AI Agent starting analysis...</div>
-                                <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
-                            </div>
-                        </div>
-                    </li>
-                `;
-                
-                console.log('✅ AI Agent starting state displayed to user');
-            }
-            
-            const dynamicPlan = await getIntelligentAiAnalysisPlan(context);
-            console.log('🔄 About to load AI Agent tasks:', dynamicPlan.tasks.length, 'tasks');
-            AITasks.loadPlan(WorkflowManager.getCurrentAgentId(), dynamicPlan.tasks);
-            
-            // Force immediate UI update after tasks are loaded
-            setTimeout(() => {
-                console.log('🔍 Checking UI state after AI tasks loaded');
-                const todoListCheck = document.getElementById('ai-todo-list');
-                if (todoListCheck) {
-                    console.log('📋 TodoList innerHTML length after load:', todoListCheck.innerHTML.length);
-                    console.log('📋 TodoList display style:', todoListCheck.style.display);
-                    console.log('📋 TodoList computed display:', window.getComputedStyle(todoListCheck).display);
-                }
-            }, 100);
-            
-            // For AI Agent mode, don't use legacy WorkflowManager task completion
-            // The AI Agent tasks will be completed as actual work progresses
-            console.log('🤖 AI Agent tasks loaded, skipping legacy task completion');
-            
-            plan = {
-                jobs: dynamicPlan.jobs,
-                charts: [],
-                planType: dynamicPlan.planType
-            }; // Include planType for proper workflow handling
-            
-            // Don't complete analysis task yet - wait until after cards are built
-        } else {
-            const context = {
-                profile: PROFILE,
-                includedRows: includedRows.slice(0, 5), // Sample rows
-                excludedDimensions,
-                maxCharts: 10
-            };
-            
-            const dynamicPlan = await getAiAnalysisPlan(context);
-            AITasks.loadPlan(WorkflowManager.getCurrentAgentId(), dynamicPlan.tasks);
-            
-            plan = {
-                jobs: dynamicPlan.jobs,
-                charts: [],
-                planType: dynamicPlan.planType
-            }; // Include planType for proper workflow handling
-            
-            // Don't complete analysis task yet - wait until after cards are built
-        }
-
-        window.CURRENT_PLAN = plan;
-        workflowTimer.stop();
-        return plan;
-
-    } catch (error) {
-        console.error("AI workflow failed:", error);
-        workflowTimer.stop();
-        WorkflowManager.fail(error);
-        showToast(`An error occurred during AI analysis: ${error.message}`, 'error');
-        return null;
-    } finally {
-        // Cleanup resources
-        workflowTimer.stop();
-    }
-  }
-}
+// runAiWorkflow function moved to ai_chart_ui_workflow.js
 
 // Global flag to prevent concurrent executions
 let isRenderingAggregates = false;
@@ -3353,7 +2916,7 @@ async function loadHistoryState(id) {
     ROWS = rows;
     DATA_COLUMNS = history.columns || [];
     LAST_PARSE_META = history.meta || {};
-    PROFILE = profile(ROWS);
+    PROFILE = profile(ROWS); window.PROFILE = PROFILE;
     
     // Restore UI state from snapshot
     MODE = snapshot.mode || 'auto';
@@ -3692,7 +3255,7 @@ async function loadHistoryState(id) {
       ROWS = backup.rows;
       DATA_COLUMNS = backup.columns;
       LAST_PARSE_META = backup.meta;
-      PROFILE = backup.profile;
+      PROFILE = backup.profile; window.PROFILE = PROFILE;
       MODE = backup.mode;
       MANUAL_ROLES = backup.manualRoles;
       MANUAL_JOBS = backup.manualJobs;
@@ -3860,6 +3423,16 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeAiSettingsHandlers({ $, showToast });
     initializeSectionToggles();
     updateAIFeaturesVisibility();
+    
+    // Initialize workflow UI with dependencies
+    initWorkflowUI({
+        WorkflowManager,
+        AITasks,
+        workflowTimer,
+        renderAggregates,
+        getIncludedRows,
+        applyMasonryLayout
+    });
     const grid = $('#results');
     if (grid) {
         // The grid is populated dynamically when data is loaded.
@@ -4032,7 +3605,7 @@ window.addEventListener('message', async (event) => {
         
         console.log('📊 DATA_COLUMNS:', DATA_COLUMNS);
         
-        PROFILE = profile(ROWS);
+        PROFILE = profile(ROWS); window.PROFILE = PROFILE;
         console.log('📊 PROFILE generated:', PROFILE);
         
         // Coerce numeric columns into numbers to avoid leftover leading-apostrophes in strings
@@ -4169,229 +3742,21 @@ window.addEventListener('load', () => {
 });
 
 // AI Summary functionality
-function checkAndGenerateAISummary() {
-  const aiSummarySection = document.getElementById('ai-summary-section');
-  const aiSummaryText = document.getElementById('ai-summary-text');
-  const apiKey = localStorage.getItem('gemini_api_key');
-  
-  console.log('🤖 checkAndGenerateAISummary called');
-  console.log('🤖 localStorage apiKey:', apiKey ? `"${apiKey.substring(0, 10)}..."` : 'null');
-  console.log('🤖 aiSummarySection element:', aiSummarySection);
-  
-  // Only show AI Summary section if API key is present
-  if (isValidApiKey(apiKey)) {
-    console.log('🤖 API key detected, showing AI Summary section');
-    if (aiSummarySection) {
-      aiSummarySection.style.display = 'block';
-      
-      // Check if AI Summary already exists (from restored history)
-      const existingSummary = aiSummaryText && aiSummaryText.innerHTML.trim();
-      if (existingSummary && existingSummary.length > 0) {
-        console.log('📄 AI Summary already exists from history, skipping generation');
-        return;
-      }
-      
-      // Generate new summary only if none exists
-      console.log('🆕 No existing summary found, generating new one');
-      generateAISummary();
-    }
-  } else {
-    console.log('🤖 No API key, hiding AI Summary section');
-    if (aiSummarySection) {
-      aiSummarySection.style.display = 'none';
-    }
-  }
-}
+// checkAndGenerateAISummary function moved to ai_chart_ui_workflow.js
 
-async function generateAISummary() {
-  const loadingDiv = document.getElementById('ai-summary-loading');
-  const textDiv = document.getElementById('ai-summary-text');
-  const regenerateBtn = document.getElementById('regenerate-summary-btn');
-  const apiKey = localStorage.getItem('gemini_api_key');
-  
-  try {
-    // Show loading and disable button
-    loadingDiv.style.display = 'block';
-    textDiv.innerHTML = '';
-    if (regenerateBtn) {
-      regenerateBtn.disabled = true;
-      regenerateBtn.textContent = '🔄 Generating...';
-    }
-    
-    console.log('🤖 Starting AI Summary generation...');
-    
-    // Collect all aggregate data and explanations
-    const aggregateData = collectAggregateData();
-    const summaryPrompt = createSummaryPrompt(aggregateData);
+// generateAISummary function moved to ai_chart_ui_workflow.js
 
-    // Use unified API wrapper with retry and language handling
-    const model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
-    const language = localStorage.getItem('ai_language') || 'English';
-    console.log('🤖 AI Summary settings:', { model, language });
+// collectAggregateData function moved to ai_chart_ui_workflow.js
 
-    const summaryText = await fetchWithRetry(apiKey, model, summaryPrompt, (msg, type, timeoutMs) => {
-      if (typeof showToast === 'function') {
-        showToast(msg, type, timeoutMs);
-      }
-    });
-    
-    // Hide loading and show result
-    loadingDiv.style.display = 'none';
-    textDiv.innerHTML = marked.parse(summaryText || 'No summary generated');
-    
-    // Re-enable button
-    if (regenerateBtn) {
-      regenerateBtn.disabled = false;
-      regenerateBtn.textContent = '🔄 Regenerate';
-    }
-    
-    console.log('🤖 AI Summary generated successfully');
-    
-    // Auto-save after AI Summary is generated
-    console.log('🔄 Triggering auto-save after AI Summary generation...');
-    debouncedAutoSave();
-    
-  } catch (error) {
-    console.error('🤖 Error generating AI Summary:', error);
-    loadingDiv.style.display = 'none';
-    textDiv.innerHTML = `<div style="color: #d32f2f; padding: 12px; background-color: #ffebee; border-radius: 6px;">
-      <strong>Error generating summary:</strong> ${error.message}
-    </div>`;
-    
-    // Re-enable button on error
-    if (regenerateBtn) {
-      regenerateBtn.disabled = false;
-      regenerateBtn.textContent = '🔄 Regenerate';
-    }
-  }
-}
+// createSummaryPrompt function moved to ai_chart_ui_workflow.js
 
-function collectAggregateData() {
-  const aggregateData = [];
-  const cards = document.querySelectorAll('#results .card');
-  
-  console.log('🤖 Collecting data from', cards.length, 'aggregate cards');
-  
-  cards.forEach((card, index) => {
-    const titleEl = card.querySelector('.card-title');
-    const valueEl = card.querySelector('.card-sub');
-    const explanationEl = card.querySelector('.ai-explanation-content');
-    
-    // Get chart information
-    const chartType = card.querySelector('canvas') ? 'Chart' : 'Table';
-    
-    // Try to get explanation from multiple possible sources
-    let explanation = 'No explanation available';
-    if (explanationEl) {
-      // Try to get stored markdown first, then fall back to text content
-      explanation = card.dataset.explanationMarkdown || explanationEl.textContent.trim() || explanationEl.innerHTML;
-    }
-    
-    if (titleEl && valueEl) {
-      const data = {
-        title: titleEl.textContent.trim(),
-        value: valueEl.textContent.trim(),
-        explanation: explanation,
-        chartType: chartType,
-        cardIndex: index + 1
-      };
-      
-      console.log(`🤖 Card ${index + 1}:`, data.title, '=', data.value, '| Explanation length:', explanation.length);
-      aggregateData.push(data);
-    } else {
-      console.log(`🤖 Card ${index + 1}: Missing title or value elements`);
-    }
-  });
-  
-  console.log('🤖 Collected', aggregateData.length, 'aggregate data items');
-  return aggregateData;
-}
+// AI Summary event listeners moved to ai_chart_ui_workflow.js
 
-function createSummaryPrompt(aggregateData) {
-  let prompt = `You are a senior data analyst providing a final executive summary of a comprehensive data analysis.
+// Regenerate button functionality moved to ai_chart_ui_workflow.js
 
-Based on the following ${aggregateData.length} key metrics and their detailed AI explanations, provide a strategic executive summary that synthesizes the findings into actionable business insights.
+// ========= AI Analysis Chat Implementation =========
 
-## Data Analysis Results:
-`;
-
-  aggregateData.forEach((agg, index) => {
-    prompt += `
-
-### ${index + 1}. ${agg.title}
-**Value:** ${agg.value}
-**Visualization:** ${agg.chartType}
-**Analysis:** ${agg.explanation}
-`;
-  });
-
-  prompt += `
-
-## Required Executive Summary Format:
-
-Please provide a comprehensive summary in markdown format with these sections:
-
-### 🎯 Key Performance Highlights
-- Top 3 most critical findings from the data
-
-### 📊 Data Insights & Patterns  
-- Major trends and patterns identified
-- Notable correlations or anomalies
-
-### 💡 Business Implications
-- What these findings mean for the business
-- Areas of strength and concern
-
-### 🚀 Strategic Recommendations
-- 3-5 specific, actionable recommendations based on the analysis
-- Priority level for each recommendation
-
-Focus on strategic insights rather than restating the individual explanations. Synthesize the information to tell the complete story of what the data reveals about business performance.`;
-
-  return prompt;
-}
-
-// Also check for AI Summary when API key changes in localStorage
-// Listen for storage changes (when API key is saved in the settings modal)
-window.addEventListener('storage', (e) => {
-  if (e.key === 'gemini_api_key') {
-    // Only check if we have aggregates to summarize
-    const cards = document.querySelectorAll('.aggregate-card');
-    if (cards.length > 0) {
-      console.log('🤖 API key changed in localStorage, checking AI Summary');
-      checkAndGenerateAISummary();
-    }
-  }
-});
-
-// Also add a custom event listener for when API key is saved in the same window
-document.addEventListener('apiKeySaved', () => {
-  const cards = document.querySelectorAll('.aggregate-card');
-  if (cards.length > 0) {
-    console.log('🤖 API key saved event received, checking AI Summary');
-    checkAndGenerateAISummary();
-  }
-});
-
-// Add regenerate button functionality
-document.addEventListener('DOMContentLoaded', () => {
-  const regenerateBtn = document.getElementById('regenerate-summary-btn');
-  if (regenerateBtn) {
-    regenerateBtn.addEventListener('click', () => {
-      const apiKey = localStorage.getItem('gemini_api_key');
-      if (apiKey && apiKey.trim()) {
-        console.log('🤖 Regenerate button clicked, generating new summary');
-        generateAISummary();
-      } else {
-        console.log('🤖 No API key available for regeneration');
-        alert('Please set your API key in the AI settings first.');
-      }
-    });
-  }
-
-  // ========= AI Analysis Chat Implementation =========
-  
-  // Chat state management (make it global for snapshot saving)
+// Chat state management (make it global for snapshot saving)
   window.chatState = {
     messages: [],
     isTyping: false,
@@ -5151,5 +4516,3 @@ Please provide a helpful, insightful response based on the above data analysis c
       }
     }, 1000);
   });
-
-});

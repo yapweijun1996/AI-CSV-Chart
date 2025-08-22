@@ -859,7 +859,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   editPanel.style.display = 'none';
   editBtn.textContent = 'Edit';
 
-  if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave();
+  window.debouncedAutoSave?.();
   if (typeof window !== 'undefined' && typeof window.forceAutoSave === 'function') { try { window.forceAutoSave('edit-apply'); } catch (e) { console.warn('forceAutoSave failed:', e); } }
   if (typeof applyMasonryLayout === 'function') requestAnimationFrame(() => { try { applyMasonryLayout(); } catch {} });
   if (typeof showToast === 'function') showToast('Aggregate updated for this card.', 'success');
@@ -874,8 +874,8 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   parentCard = c.closest('.card');
   
   // Auto redraw + auto-save on control changes
-  typeSel.addEventListener('change', () => { draw(); if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave(); });
-  topNInput.addEventListener('change', () => { draw(); if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave(); });
+  typeSel.addEventListener('change', () => { draw(); window.debouncedAutoSave?.(); });
+  topNInput.addEventListener('change', () => { draw(); window.debouncedAutoSave?.(); });
 
   addChartBtn.onclick = () => {
     const t = typeSel.value;
@@ -885,7 +885,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
     const title = parentCard.querySelector('.card-title').textContent;
     renderChartCard(agg, chartsContainer, t, n, title.replace(/\s+/, '_'), options);
     showToast('New chart card added.', 'success');
-    if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave();
+    window.debouncedAutoSave?.();
   };
 
   deleteBtn.onclick = () => {
@@ -902,7 +902,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
     }
     chartCard.remove();
     showToast('Chart deleted.', 'info');
-    if (typeof debouncedAutoSave !== 'undefined') debouncedAutoSave();
+    window.debouncedAutoSave?.();
   };
   
   function draw() {
@@ -947,7 +947,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
     showToast(`Downloaded ${filename}`, 'success');
   };
   
-  redrawBtn.onclick = draw;
+  redrawBtn.onclick = () => { draw(); window.debouncedAutoSave?.(); };
   
   // Initial draw
   draw();
