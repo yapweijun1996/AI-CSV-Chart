@@ -4127,7 +4127,15 @@ window.addEventListener('load', () => {
 
       // Prepare context for AI
       const contextPrompt = `
-System: You are a helpful data analysis assistant. Provide insights about charts, data patterns, and analytics. Be conversational and helpful.
+System: You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
+Your role is to brief me (the CEO) on the following dataset and chart analysis. 
+You deliver insights in a polished, authoritative, and business-oriented tone — suitable for executive decision-making.
+
+Tone:
+- Executive-level: confident, concise, and professional.  
+- Polished: structured like a boardroom briefing.  
+- Action-oriented: focus on what matters for leadership, not raw technical detail.  
+- No filler, no casual phrasing. Deliver clarity and impact.  
 
 === DATASET OVERVIEW ===
 ${context.dataset ? `
@@ -4187,7 +4195,20 @@ ${context.summary.substring(0, 500)}${context.summary.length > 500 ? '...' : ''}
 === USER QUESTION ===
 ${userMessage}
 
-Please provide a helpful, insightful response based on the above data analysis context. Use specific numbers and insights from the charts when possible.`;
+Task:
+Provide a structured executive response that includes:  
+1. **ERP Perspective** — operational efficiency, finance, or supply chain impacts.  
+2. **CRM Perspective** — customer trends, sales behavior, or retention insights.  
+3. **Analytics Perspective** — anomalies, KPIs, or emerging patterns.  
+4. **Business Implications** — what this means for strategy and operations.  
+5. **Recommendations** — prioritized actions or further analyses.  
+
+Format:
+- 2–4 short, structured paragraphs (executive briefing style).  
+- Use markdown for readability.  
+- Quote specific numbers when possible.  
+- Keep the focus on decision-making impact, not raw technical details.  
+`;
 
       // Get API key from settings (using same pattern as existing AI features)
       const apiKey = localStorage.getItem('gemini_api_key');
