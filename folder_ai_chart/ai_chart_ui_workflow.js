@@ -711,14 +711,6 @@ export function renderExplanationCard(parentCard, title, contentHTML) {
     return { explanationContainer, contentEl, regenerateBtn };
 }
 
-// AI Plan Generation & Agent Orchestration
-// (Will be moved from ai_chart_ui.js lines 2129-2410 and 2433-2585)
-
-// AI Summary Functionality
-// (Will be moved from ai_chart_ui.js lines 4171-4351)
-
-// AI Analysis Chat Implementation
-// (Will be moved from ai_chart_ui.js lines 4391-5153)
 
 /**
  * Initialize workflow UI with dependencies
@@ -965,9 +957,24 @@ export async function generateExplanation(agg, job, parentCard) {
         };
  
         const prompt = `
-            You are a data analyst. Explain the following data aggregation.
-            Provide a short explanation (2-4 paragraphs) describing what the aggregate shows, notable anomalies, and suggested follow-up analyses.
- 
+You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
+You brief me as if I were the CEO, delivering insights in a confident, polished, and efficient manner.
+
+Tone:
+- Executive-level: clear, authoritative, and professional.
+- Concise: no filler, no casual phrasing, no unnecessary detail.
+- Action-oriented: emphasize what matters for decision-making.
+- Polished: write in a business briefing style, as if preparing notes for a board meeting.
+
+Task:
+Review the aggregated business data and provide a summary in 2–4 short, well-structured paragraphs. 
+Your explanation must include:
+1. ERP Perspective — operational patterns (inventory, supply chain, finance) and their business impact.  
+2. CRM Perspective — customer trends (sales, retention, engagement) and notable anomalies.  
+3. Data Analytics Perspective — anomalies, KPI shifts, and recommended follow-up analyses.  
+
+Always conclude with prioritized recommendations that guide executive action.  
+
             Context:
             ${JSON.stringify(context, null, 2)}
         `;
@@ -1165,23 +1172,32 @@ function createSummaryPrompt(aggregateData) {
     ).join('\n');
     
     const prompt = `
-You are a data analyst providing an executive summary of data analysis results. 
+You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
+Your role is to deliver a polished executive summary as if you were briefing the CEO.
 
+Tone:
+- Executive-level: confident, authoritative, and professional.  
+- Concise: avoid filler or technical jargon; focus on clarity and impact.  
+- Action-oriented: emphasize business implications and next steps.  
+- Polished: structured like an executive briefing note for senior stakeholders.  
+
+Task:
 Based on the following ${totalCards} data visualization(s) and their insights:
 
 ${cardSummaries}
 
-Please provide a comprehensive executive summary that includes:
+Provide a comprehensive executive summary (2–4 short, structured paragraphs) that includes:  
+1. **Key Findings** — most important insights and trends.  
+2. **Data Overview** — scope and nature of the analysis (ERP, CRM, or operational context).  
+3. **Notable Patterns** — correlations, anomalies, or emerging trends.  
+4. **Business Implications** — relevance to operations, customers, or strategy.  
+5. **Recommendations** — prioritized actions or follow-up analyses.  
 
-1. **Key Findings**: The most important insights and trends discovered
-2. **Data Overview**: Brief description of the scope and nature of the analysis  
-3. **Notable Patterns**: Any significant correlations, outliers, or trends
-4. **Business Implications**: What these findings might mean for decision-making
-5. **Recommendations**: Suggested next steps or areas for further investigation
+Formatting:
+- Use markdown for readability (headings, bullet points).  
+- Write in concise, business-oriented language suitable for board-level communication.  
+- Deliver insights as an executive summary — no raw data or technical detail.  
 
-Format your response in clear, professional language suitable for business stakeholders. Use markdown formatting for better readability.
-
-Keep the summary concise but comprehensive, focusing on actionable insights rather than technical details.
 `;
 
     return prompt;
