@@ -992,13 +992,16 @@ Tone:
 - Polished: write in a business briefing style, as if preparing notes for a board meeting.
 
 Task:
-Review the aggregated business data and provide a summary in 3-8 short, well-structured paragraphs. 
-Your explanation must include:
-1. ERP Perspective — operational patterns (inventory, supply chain, finance) and their business impact.  
-2. CRM Perspective — customer trends (sales, retention, engagement) and notable anomalies.  
-3. Data Analytics Perspective — anomalies, KPI shifts, and recommended follow-up analyses.  
+Review the aggregated business data and provide a summary in 3-8 short, well-structured paragraphs.  
+Automatically identify which perspectives are most relevant based on the dataset and charts. Possible perspectives include ERP, CRM, finance, operations, customer behavior, or general analytics.  
+Your explanation should focus on the most meaningful insights for decision-making. Include only the perspectives that are supported by the context.
 
-Always conclude with prioritized recommendations that guide executive action.  
+Your summary should include:
+1. Key Insights from the relevant perspectives — highlight trends, anomalies, and patterns.
+2. Business Implications — explain the impact of these insights on operations, customers, or strategy.
+3. Recommendations — propose prioritized next steps or follow-up analyses.
+
+Always conclude with actionable recommendations that guide executive decision-making.  
 
             Context:
             ${JSON.stringify(context, null, 2)}
@@ -1198,30 +1201,38 @@ function createSummaryPrompt(aggregateData) {
     
     const prompt = `
 You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
-Your role is to deliver a polished executive summary.
+You brief me, delivering insights in a confident, polished, and efficient manner.
 
 Tone:
-- Executive-level: confident, authoritative, and professional.  
-- Concise: avoid filler or technical jargon; focus on clarity and impact.  
-- Action-oriented: emphasize business implications and next steps.  
-- Polished: structured like an executive briefing note for senior stakeholders.  
+- Executive-level: clear, authoritative, and professional.
+- Concise: no filler, no casual phrasing, no unnecessary detail.
+- Action-oriented: emphasize what matters for decision-making.
+- Polished: write in a business briefing style, as if preparing notes for a board meeting.
 
 Task:
-Based on the following ${totalCards} data visualization(s) and their insights:
+Based on the following ${totalCards} data visualization(s) and their insights,
 
+Card Summaries:
 ${cardSummaries}
 
-Provide a comprehensive executive summary (3-8 short, structured paragraphs) that includes:  
-1. **Key Findings** — most important insights and trends.  
-2. **Data Overview** — scope and nature of the analysis (ERP, CRM, or operational context).  
-3. **Notable Patterns** — correlations, anomalies, or emerging trends.  
-4. **Business Implications** — relevance to operations, customers, or strategy.  
-5. **Recommendations** — prioritized actions or follow-up analyses.  
 
-Formatting:
-- Use markdown for readability (headings, bullet points).  
-- Write in concise, business-oriented language suitable for board-level communication.  
-- Deliver insights as an executive summary — no raw data or technical detail.  
+Review the aggregated business data and provide a summary in 3–8 short, well-structured paragraphs.  
+
+Intelligent Perspective Selection:
+- Automatically identify which perspectives are most relevant based on the dataset and charts.
+- Possible perspectives include ERP, CRM, finance, operations, customer behavior, or general analytics.
+- If a perspective is not supported by the data, omit it and focus on the most meaningful insights.
+- Adapt dynamically to the data context, emphasizing actionable insights for decision-making.
+
+Your summary should include:
+1. **Key Insights** — highlight trends, anomalies, and patterns from the relevant perspectives.
+2. **Business Implications** — explain the impact of these insights on operations, customers, or strategy.
+3. **Recommendations** — propose prioritized next steps or follow-up analyses, focused on actionable outcomes.
+
+Additional Guidelines:
+- Keep responses concise and executive-ready, 3–8 paragraphs or equivalent bullet points.
+- When appropriate, ask clarifying questions to better understand priorities or focus areas.
+- Maintain a professional, confident, and polished tone throughout.
 
 `;
 
