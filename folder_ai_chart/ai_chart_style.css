@@ -1563,7 +1563,7 @@ mark {
   #ai-chat-container {
     display: flex;
     flex-direction: column;
-    height: 500px;
+    height: 85vh;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
