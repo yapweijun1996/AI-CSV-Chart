@@ -1,591 +1,599 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>CSV → Aggregates + Cards + Data Table (Auto + Manual + More Charts, Improved)</title>
-
-<!-- Chart.js v4 -->
-<script src="./folder_ai_chart/chart.umd.min.js"></script>
-<!-- PapaParse -->
-<script src="./folder_ai_chart/papaparse.min.js"></script>
-<script src="./folder_ai_chart/marked.min.js"></script>
-
-
-<link rel="stylesheet" href="./folder_ai_chart/ai_chart_style.css">
-</head>
-<body>
-<nav id="sidebar" class="sidebar" aria-label="History sidebar">
-  <div class="sidebar-header">
-    <h3 class="sidebar-title">History</h3>
-    <button id="aiSettingsBtn" title="AI Settings" class="tooltip" data-tooltip="AI Settings" aria-label="AI Settings">🤖</button>
-    <button id="manageHistoryBtn" title="Manage history" class="tooltip" data-tooltip="Manage history" aria-label="Manage history">⚙️</button>
-    <button id="sidebar-toggle" title="Toggle sidebar" aria-controls="sidebar" aria-expanded="true">☰</button>
-  </div>
-  <div class="sidebar-search">
-    <input type="text" id="history-search" placeholder="Search reports..." />
-  </div>
-  <ul id="history-list" role="listbox" aria-label="Saved reports"></ul>
-</nav>
-<main id="main-content" class="main-content">
-<div class="wrap">
-  <div class="section" data-section-id="csv-input">
-    <div class="section-header">
-      <h2>CSV → Aggregates (Card UI) + Raw Data Table</h2>
-    </div>
-    <div class="section-content" id="section-content-csv-input">
-      <div class="bar">
-        <input id="file" type="file" accept=".csv,.txt" style="display:none;" />
-        <button id="fileSelectBtn">Select CSV File</button>
-        <button id="loadBtn" style="display:none;">Load CSV</button>
-        <button id="updateReportBtn" disabled>Update Report</button>
-        <button id="saveAsNewBtn" disabled>Save as New</button>
-        <span id="meta" class="muted"></span>
-      </div>
-      <div class="bar" style="margin-top:8px">
-        <label>Delimiter:
-          <span class="tooltip tooltip-wide" data-tooltip="Character that separates values in your CSV. Auto-detection usually works best. Override if parsing looks incorrect."></span>
-          <select id="delimiter">
-            <option value="auto">Auto</option>
-            <option value=",">Comma (,)</option>
-            <option value=";">Semicolon (;)</option>
-            <option value="\t">Tab (\t)</option>
-            <option value="|">Pipe (|)</option>
-          </select>
-        </label>
-        <label><input id="hasHeader" type="checkbox" checked /> First row has headers
-          <span class="tooltip tooltip-wide" data-tooltip="Check if your CSV's first row contains column names instead of data. Usually enabled for standard CSV files."></span>
-        </label>
-        <label>Date format:
-          <span class="tooltip tooltip-wide" data-tooltip="Auto tries to detect day/month order. Override if chart sorting or recognition looks wrong. Default day-first (dd/mm/yyyy)."></span>
-          <select id="dateFormat">
-            <option value="auto">Auto (default: dd/mm/yyyy)</option>
-            <option value="dd/mm/yyyy">dd/mm/yyyy</option>
-            <option value="mm/dd/yyyy">mm/dd/yyyy</option>
-            <option value="yyyy-mm-dd">yyyy-mm-dd (ISO)</option>
-          </select>
-        </label>
-   
-        <label class="tag">
-          Mode:
-          <span class="tooltip tooltip-wide" data-tooltip="Auto: Uses AI-like detection to automatically assign column roles and generate aggregates. Manual: Allows you to override column roles and add custom aggregates. AI Agent: Uses advanced AI to intelligently analyze data and create comprehensive analysis plans.">
-          </span>
-          <select id="mode">
-            <option value="auto" selected>Auto</option>
-            <option value="manual">Manual</option>
-            <option value="ai_agent">AI Agent</option>
-          </select>
-        </label>
-        <label><input id="autoExclude" type="checkbox" checked /> Auto-exclude totals/subtotals
-          <span class="tooltip" data-tooltip="Automatically detect and exclude rows that appear to be totals or subtotals from aggregations."></span>
-        </label>
-        <button id="editRolesBtn" style="display:none">Edit column roles
-          <span class="tooltip tooltip-wide" data-tooltip="Override automatic column role detection. Change how columns are classified: metric (numbers for calculation), dimension (categories for grouping), date, id, or ignore."></span>
-        </button>
-        <button id="addAggBtn" style="display:none">Add aggregate
-          <span class="tooltip" data-tooltip="Create custom aggregations by selecting specific groupBy and metric combinations."></span>
-        </button>
-        <button id="clearManualBtn" style="display:none">Clear manual
-          <span class="tooltip" data-tooltip="Reset all manual overrides and return to automatic mode."></span>
-        </button>
-        <button id="recalcBtn" style="display:none">Recalculate with roles
-          <span class="tooltip" data-tooltip="Regenerate aggregates using current role assignments."></span>
-        </button>
-  
-        <button id="autoBtn">Generate Cards
-          <span class="tooltip tooltip-wide" data-tooltip="Automatically analyze your CSV data and create up to 10 interactive charts and data tables based on detected patterns and relationships."></span>
-        </button>
-        <span class="tag">Up to 10 aggregates</span>
-      </div>
-      <div class="bar" style="margin-top:8px">
-        <label>Completeness threshold:
-          <span class="tooltip" data-tooltip="Minimum non-null percentage for a column to be used as a dimension (0.0-1.0)."></span>
-          <input id="completenessThreshold" type="number" min="0" max="1" step="0.1" value="0.6" style="width:80px" />
-        </label>
-        <label>Cardinality limit (ratio):
-          <span class="tooltip" data-tooltip="Maximum unique values as a fraction of total rows for a column to be used as a dimension (0.0-1.0)."></span>
-          <input id="cardinalityLimitRatio" type="number" min="0" max="1" step="0.1" value="0.5" style="width:80px" />
-        </label>
-        <label>Cardinality limit (absolute):
-          <span class="tooltip" data-tooltip="Maximum absolute number of unique values for a column to be used as a dimension."></span>
-          <input id="cardinalityAbsoluteLimit" type="number" min="1" value="100" style="width:80px" />
-        </label>
-      </div>
-    </div>
-  </div>
-  
-  <div class="section" id="ai-todo-list-section" style="display: none;" data-section-id="ai-workflow">
-    <div class="section-header">
-      <h3>AI Task Workflow</h3>
-    </div>
-    <div class="section-content" id="section-content-ai-workflow">
-      <div id="ai-progress-bar-container">
-        <div id="ai-progress-bar"></div>
-      </div>
-      <div id="ai-current-task-details"></div>
-      <ul id="ai-todo-list"></ul>
-    </div>
-  </div>
-
-  <div class="section" data-section-id="aggregates">
-    <div class="section-header">
-      <h3>Aggregates</h3>
-    </div>
-    <div class="section-content" id="section-content-aggregates">
-      <div id="results" class="grid"></div>
-    </div>
-  </div>
-
-  <div class="section" id="ai-summary-section" style="display: none;" data-section-id="ai-summary">
-    <div class="section-header">
-      <div class="section-title-group">
-        <h3>AI Summary</h3>
-        <button id="regenerate-summary-btn" class="regenerate-btn" title="Regenerate AI Summary">
-          🔄 Regenerate
-        </button>
-      </div>
-    </div>
-    <div class="section-content" id="section-content-ai-summary">
-      <div id="ai-summary-content">
-        <div id="ai-summary-loading" style="display: none;">
-          <p>🤖 Generating final summary...</p>
-          <div class="loading-spinner"></div>
-        </div>
-        <div id="ai-summary-text"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="section" id="ai-analysis-section" style="display: none;" data-section-id="ai-analysis">
-    <div class="section-header">
-      <div class="section-title-group">
-        <h3>AI Analysis Chat</h3>
-        <button id="refresh-context-btn" class="regenerate-btn" title="Refresh Context">
-          🔄 Refresh Context
-        </button>
-        <button id="clear-chat-btn" class="clear-btn" title="Clear Chat History">
-          🗑️ Clear
-        </button>
-      </div>
-    </div>
-    <div class="section-content" id="section-content-ai-analysis">
-      <div id="ai-chat-container">
-        <div id="context-status" class="context-status">
-          <span class="context-indicator">📊</span>
-          <span class="context-text">Context: Ready</span>
-          <button id="toggle-context-details" class="context-toggle" title="Show context details">
-            ▼
-          </button>
-        </div>
-        <div id="context-details" class="context-details" style="display: none;">
-          <div class="context-summary">
-            <div id="charts-count">Charts: 0</div>
-            <div id="context-last-updated">Last updated: Never</div>
-          </div>
-          <div class="context-breakdown">
-            <div class="context-section">
-              <div class="context-section-title">📊 Chart Data</div>
-              <div id="chart-breakdown-list"></div>
-            </div>
-            <div class="context-section">
-              <div class="context-section-title">🤖 AI Explanations</div>
-              <div id="explanation-breakdown"></div>
-            </div>
-            <div class="context-section">
-              <div class="context-section-title">📋 AI Summary</div>
-              <div id="summary-breakdown"></div>
-            </div>
-            <div class="context-section">
-              <div class="context-section-title">📈 Dataset Info</div>
-              <div id="dataset-breakdown"></div>
-            </div>
-          </div>
-        </div>
-        <div id="chat-messages" class="chat-messages">
-          <div class="welcome-message">
-            <div class="ai-message">
-              <div class="message-avatar">🤖</div>
-              <div class="message-content">
-                <p>Hello! I'm your AI assistant for data analysis. I have access to your current charts, aggregations, and data patterns. Ask me anything about your data!</p>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div id="chat-input-container" class="chat-input-container">
-          <div id="chat-typing-indicator" class="typing-indicator" style="display: none;">
-            <span class="typing-dots">
-              <span></span>
-              <span></span>
-              <span></span>
-            </span>
-            AI is typing...
-          </div>
-          <div class="chat-input-area">
-            <textarea id="chat-input" class="chat-input" placeholder="Ask about your data analysis, charts, or patterns..." rows="1"></textarea>
-            <button id="send-chat-btn" class="send-btn" title="Send message" disabled>
-              <span class="send-icon">➤</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="section" data-section-id="raw-data">
-    <div class="section-header">
-      <h3>Raw Data</h3>
-    </div>
-    <div class="section-content" id="section-content-raw-data">
-      <div class="table-controls">
-        <label>Search: <input id="searchInput" type="text" placeholder="type to filter across all columns" style="min-width:260px"></label>
-        <label>Rows per page:
-          <select id="rowsPerPage">
-            <option>10</option>
-            <option selected>25</option>
-            <option>50</option>
-            <option>100</option>
-          </select>
-        </label>
-        <div class="pager">
-          <button id="prevPage">Prev</button>
-          <span class="count" id="pageInfo">Page 1 / 1</span>
-          <button id="nextPage">Next</button>
-        </div>
-        <span class="count" id="rowInfo">Showing 0–0 of 0</span>
-        <button id="downloadFiltered">Download filtered CSV</button>
-        <button id="resetExclusion">Reset auto-exclusion</button>
-      </div>
-      <div class="data-table-wrap">
-        <table id="dataTable">
-          <thead id="dataThead"></thead>
-          <tbody id="dataTbody"></tbody>
-          <tfoot id="dataTFoot"></tfoot>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <div class="section" data-section-id="schema-info">
-    <div class="section-header">
-      <h3>Schema / Parser Info</h3>
-    </div>
-    <div class="section-content" id="section-content-schema-info">
-      <pre id="schema" class="muted" style="white-space:pre-wrap;margin:0"></pre>
-    </div>
-  </div>
-
-</div>
-
-<!-- Role Editor Modal -->
-<div id="roleModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h3>Column Roles</h3>
-      <button id="closeRoleModal" aria-label="Close">Close</button>
-    </div>
-    <table class="role-table">
-      <thead><tr><th>Column</th><th>Detected Type</th><th>Unique</th><th>Role</th><th>Sample</th></tr></thead>
-      <tbody id="roleTBody"></tbody>
-    </table>
-    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button id="saveRoles">Save roles</button>
-      <div class="help-text">
-        <strong>Role Definitions:</strong><br>
-        <b>metric</b> - Numeric columns for calculations (sum, avg, count)<br>
-        <b>dimension</b> - Categories for grouping (text with limited unique values)<br>
-        <b>date</b> - Time-based fields for time series analysis<br>
-        <b>id</b> - Unique identifiers (excluded from aggregations)<br>
-        <b>ignore</b> - Columns to exclude from all processing
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Add Aggregate Modal -->
-<div id="aggModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h3>Add Aggregate</h3>
-      <button id="closeAggModal" aria-label="Close">Close</button>
-    </div>
-    <div class="bar">
-      <label>Group by:
-        <span class="tooltip" data-tooltip="Column to group data by (dimension or date columns)"></span>
-        <select id="aggGroupBy"></select>
-      </label>
-      <label>Date bucket:
-        <span class="tooltip tooltip-wide" data-tooltip="For date columns, group dates into time periods. Leave empty for exact dates."></span>
-        <select id="aggBucket">
-          <option value="">(none)</option>
-          <option value="day">day</option>
-          <option value="week">week</option>
-          <option value="month">month</option>
-          <option value="quarter">quarter</option>
-          <option value="year">year</option>
-        </select>
-      </label>
-      <label>Metric:
-        <span class="tooltip" data-tooltip="Numeric column to aggregate (metric columns only)"></span>
-        <select id="aggMetric"></select>
-      </label>
-      <label>Function:
-        <span class="tooltip tooltip-wide" data-tooltip="sum: Add all values | avg: Calculate average | count: Count non-null values | min/max: Find minimum/maximum values | distinct_count: Count unique values"></span>
-        <select id="aggFunc">
-          <option value="sum">sum</option>
-          <option value="avg">avg</option>
-          <option value="min">min</option>
-          <option value="max">max</option>
-          <option value="count">count</option>
-          <option value="distinct_count">distinct_count</option>
-        </select>
-      </label>
-    </div>
-    <div class="bar" style="margin-top:8px">
-      <label>Chart:
-        <span class="tooltip tooltip-wide" data-tooltip="Auto: System chooses best chart based on data. Bar: Good for categories. Line/Area: Best for time series. Pie/Doughnut: Good for proportions of a whole."></span>
-        <select id="aggChart">
-          <option value="auto">Auto</option>
-          <option value="bar">Bar (vertical)</option>
-          <option value="hbar">Bar (horizontal)</option>
-          <option value="line">Line</option>
-          <option value="area">Area</option>
-          <option value="pie">Pie</option>
-          <option value="doughnut">Doughnut</option>
-          <option value="polarArea">Polar Area</option>
-          <option value="radar">Radar</option>
-        </select>
-      </label>
-      <label>Top-N:
-        <span class="tooltip tooltip-wide" data-tooltip="Limit pie/doughnut charts to top N categories by value. Remaining items grouped as 'Others'. Helps with readability when there are many small categories."></span>
-        <input id="aggTopN" type="number" min="3" max="999" value="20" style="width:90px" />
-        <span class="muted small" style="display:block">Max items for pie/doughnut charts (3-999, default: 20)</span>
-      </label>
-      <button id="addAggConfirm">Add</button>
-    </div>
-    <div class="help-text">
-      <strong>Tips:</strong> 
-      • Use date columns with time buckets for time series analysis
-      • Combine categories (dimensions) with numeric metrics for comparison charts  
-      • Count function works with any column type for frequency analysis
-      • Try different chart types to find the best visualization for your data
-    </div>
-  </div>
-</div>
-
-<!-- History Management Modal -->
-<div id="historyModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h3>Manage History</h3>
-      <button id="closeHistoryModal" aria-label="Close">Close</button>
-    </div>
-    <div style="display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border);">
-      <input type="checkbox" id="history-select-all" />
-      <label for="history-select-all">Select All</label>
-    </div>
-    <div id="history-management-list" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; padding-top: 8px;">
-      <!-- History items will be populated here -->
-    </div>
-    <div class="card-foot" style="justify-content: space-between;">
-      <button id="deleteSelectedBtn" disabled style="background: #fca5a5; color: #7f1d1d; border: 1px solid #f87171;">Delete Selected</button>
-      <button id="clearAllHistoryBtn" style="background: #ef4444; color: white; border: none;">Clear All History</button>
-    </div>
-  </div>
-</div>
-
-<!-- Removed Rows Modal -->
-<div id="removedRowsModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h3>Rows Removed by minGroupShare</h3>
-      <button id="closeRemovedRowsModal" aria-label="Close">Close</button>
-    </div>
-    <div class="data-table-wrap" style="max-height: 60vh;">
-      <table id="removedRowsTable" class="role-table">
-        <thead></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-
-<!-- AI Settings Modal -->
-<div id="aiSettingsModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal-card">
-    <div class="modal-head">
-      <h3>AI Settings</h3>
-      <button id="closeAiSettingsModal" aria-label="Close">Close</button>
-    </div>
-    <div style="padding: 16px;">
-      <div style="margin-bottom: 16px;">
-        <label for="apiKeyInput" style="display: block; margin-bottom: 8px; font-weight: 500;">
-          Gemini API Key:
-        </label>
-        <input 
-          type="password" 
-          id="apiKeyInput" 
-          placeholder="Enter your Gemini API key..."
-          style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px;"
-        />
-        <small style="color: var(--muted); margin-bottom: 16px; display: block;">
-          Your API key will be stored locally in your browser and never sent to our servers.
-        </small>
-      </div>
-      
-      <div style="margin-bottom: 16px;">
-        <label for="modelSelect" style="display: block; margin-bottom: 8px; font-weight: 500;">
-          Model:
-        </label>
-        <select 
-          id="modelSelect" 
-          style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: white;"
-        >
-          <option value="gemini-2.5-flash" selected>Gemini 2.5 Flash (Fast & Efficient)</option>
-          <option value="gemini-2.5-pro">Gemini 2.5 Pro (Advanced Reasoning)</option>
-          <option value="gemma-3-27b-it">Gemma 3 27B</option>
-        </select>
-      </div>
-
-      <div style="margin-bottom: 16px;">
-        <label for="languageSelect" style="display: block; margin-bottom: 8px; font-weight: 500;">
-          Response Language:
-        </label>
-        <select
-          id="languageSelect"
-          style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: white;"
-        >
-          <option value="English" selected>English</option>
-          <option value="Mandarin">Mandarin</option>
-          <option value="Spanish">Spanish</option>
-          <option value="French">French</option>
-          <option value="German">German</option>
-          <option value="Japanese">Japanese</option>
-          <option value="Korean">Korean</option>
-          <option value="Russian">Russian</option>
-          <option value="Arabic">Arabic</option>
-          <option value="Portuguese">Portuguese</option>
-          <option value="Italian">Italian</option>
-          <option value="Dutch">Dutch</option>
-          <option value="Hindi">Hindi</option>
-          <option value="Turkish">Turkish</option>
-          <option value="Vietnamese">Vietnamese</option>
-          <option value="Polish">Polish</option>
-          <option value="Swedish">Swedish</option>
-          <option value="Thai">Thai</option>
-          <option value="Indonesian">Indonesian</option>
-          <option value="Hebrew">Hebrew</option>
-        </select>
-      </div>
-<div style="margin-bottom: 16px;">
-        <label for="defaultModeSelect" style="display: block; margin-bottom: 8px; font-weight: 500;">
-          Default Generate Mode:
-        </label>
-        <select id="defaultModeSelect" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: white;">
-          <option value="auto">Auto (Quick Analysis)</option>
-          <option value="ai_agent">AI Agent (Intelligent Analysis)</option>
-        </select>
-        <small style="color: var(--muted); display: block; margin-top: 4px;">
-          Choose which mode to use when loading CSV files
-        </small>
-      </div>
-      
-      <div style="margin-bottom: 16px;">
-        <button
-          id="testApiBtn"
-          style="width: 100%; padding: 10px; background: #f3f4f6; color: var(--ink); border: 1px solid var(--border); border-radius: 6px; font-weight: 500;"
-        >
-          🧪 Test API Connection
-        </button>
-        <div id="testResult" style="margin-top: 8px; padding: 8px; border-radius: 4px; display: none;">
-        </div>
-      </div>
-      
-      <div style="display: flex; gap: 8px; justify-content: flex-end;">
-        <button id="clearApiKeyBtn" style="background: #fee2e2; color: #dc2626; border-color: #fecaca;">
-          Clear
-        </button>
-        <button id="saveApiKeyBtn" style="background: var(--accent); color: white; border-color: var(--accent);">
-          Save
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div id="toast-container" class="toast-container"></div>
-<div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-
-<script type="module" src="./folder_ai_chart/ai_chart_ui.js"></script>
-</main>
-<div id="floating-tooltip" aria-hidden="true"></div>
-<script>
- document.addEventListener('DOMContentLoaded', () => {
-   const chatInput = document.getElementById('chat-input');
-   if (chatInput) {
-     const initialHeight = getComputedStyle(chatInput).height;
-     const expandedHeight = '120px'; // Define a larger height for focus
- 
-     // Function to expand based on content, but not less than the expanded height
-     const autoExpand = () => {
-       chatInput.style.height = 'auto'; // Reset to calculate scrollHeight correctly
-       const scrollHeight = chatInput.scrollHeight;
-       // Use the larger of the scroll height or the defined expanded height
-       chatInput.style.height = Math.max(scrollHeight, parseInt(expandedHeight)) + 'px';
-     };
- 
-     // On focus, expand to the defined larger height
-     chatInput.addEventListener('focus', () => {
-       chatInput.style.height = expandedHeight;
-       // Also run autoExpand in case there's already content
-       autoExpand();
-     });
- 
-     // On input, continue to expand with content
-     chatInput.addEventListener('input', autoExpand);
- 
-     // On blur, reset to initial height only if empty
-     chatInput.addEventListener('blur', () => {
-       if (chatInput.value.trim() === '') {
-         chatInput.style.height = initialHeight;
-       }
-     });
-   }
-   const tooltip = document.getElementById('floating-tooltip');
-   if (!tooltip) return;
-
-   const sidebar = document.getElementById('sidebar');
-   const historyList = document.getElementById('history-list');
-
-   if (!sidebar || !historyList) return;
-
-   const showTooltip = (e) => {
-     if (!sidebar.classList.contains('collapsed')) return;
-     const target = e.target.closest('.history-item');
-     if (!target) return;
-
-     const tooltipText = target.getAttribute('data-tooltip');
-     if (!tooltipText) return;
-
-     tooltip.textContent = tooltipText;
-     tooltip.classList.add('show');
-
-     const targetRect = target.getBoundingClientRect();
-     const tooltipRect = tooltip.getBoundingClientRect();
-
-     tooltip.style.left = `${targetRect.right + 12}px`;
-     tooltip.style.top = `${targetRect.top + (targetRect.height / 2)}px`;
-   };
-
-   const hideTooltip = () => {
-     tooltip.classList.remove('show');
-   };
-
-   historyList.addEventListener('mouseover', showTooltip);
-   historyList.addEventListener('mouseout', hideTooltip);
-   historyList.addEventListener('focusin', showTooltip);
-   historyList.addEventListener('focusout', hideTooltip);
- });
-</script>
-</body>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width,initial-scale=1" />
+		<title>AI Chart</title>
+		
+		<!-- Chart.js v4 -->
+		<script src="./folder_ai_chart/chart.umd.min.js"></script>
+		<!-- PapaParse -->
+		<script src="./folder_ai_chart/papaparse.min.js"></script>
+		<script src="./folder_ai_chart/marked.min.js"></script>
+		
+		<link rel="stylesheet" href="./folder_ai_chart/ai_chart_style.css">
+	</head>
+	<body>
+		<nav id="sidebar" class="sidebar" aria-label="History sidebar">
+			<div class="sidebar-header">
+				<h3 class="sidebar-title">History</h3>
+				<button id="aiSettingsBtn" title="AI Settings" class="tooltip" data-tooltip="AI Settings" aria-label="AI Settings">🤖</button>
+				<button id="manageHistoryBtn" title="Manage history" class="tooltip" data-tooltip="Manage history" aria-label="Manage history">⚙️</button>
+				<button id="sidebar-toggle" title="Toggle sidebar" aria-controls="sidebar" aria-expanded="true">☰</button>
+			</div>
+			<div class="sidebar-search">
+				<input type="text" id="history-search" placeholder="Search reports..." />
+			</div>
+			<ul id="history-list" role="listbox" aria-label="Saved reports"></ul>
+		</nav>
+		<main id="main-content" class="main-content">
+			<div class="wrap">
+				<div class="section" data-section-id="csv-input">
+					<div class="section-header">
+						<h2>CSV → Aggregates (Card UI) + Raw Data Table</h2>
+					</div>
+					<div class="section-content" id="section-content-csv-input">
+						<div class="bar">
+							<input id="file" type="file" accept=".csv,.txt" style="display:none;" />
+							<button id="fileSelectBtn">Select CSV File</button>
+							<button id="loadBtn" style="display:none;">Load CSV</button>
+							<button id="updateReportBtn" disabled>Update Report</button>
+							<button id="saveAsNewBtn" disabled>Save as New</button>
+							<span id="meta" class="muted"></span>
+						</div>
+						<div class="bar" style="margin-top:8px">
+							<label>
+								Delimiter:
+								<span class="tooltip tooltip-wide" data-tooltip="Character that separates values in your CSV. Auto-detection usually works best. Override if parsing looks incorrect."></span>
+								<select id="delimiter">
+									<option value="auto">Auto</option>
+									<option value=",">Comma (,)</option>
+									<option value=";">Semicolon (;)</option>
+									<option value="\t">Tab (\t)</option>
+									<option value="|">Pipe (|)</option>
+								</select>
+							</label>
+							<label>
+								<input id="hasHeader" type="checkbox" checked /> First row has headers
+								<span class="tooltip tooltip-wide" data-tooltip="Check if your CSV's first row contains column names instead of data. Usually enabled for standard CSV files."></span>
+							</label>
+							<label>
+								Date format:
+								<span class="tooltip tooltip-wide" data-tooltip="Auto tries to detect day/month order. Override if chart sorting or recognition looks wrong. Default day-first (dd/mm/yyyy)."></span>
+								<select id="dateFormat">
+									<option value="auto">Auto (default: dd/mm/yyyy)</option>
+									<option value="dd/mm/yyyy">dd/mm/yyyy</option>
+									<option value="mm/dd/yyyy">mm/dd/yyyy</option>
+									<option value="yyyy-mm-dd">yyyy-mm-dd (ISO)</option>
+								</select>
+							</label>
+							
+							<label class="tag">
+								Mode:
+								<span class="tooltip tooltip-wide" data-tooltip="Auto: Uses AI-like detection to automatically assign column roles and generate aggregates. Manual: Allows you to override column roles and add custom aggregates. AI Agent: Uses advanced AI to intelligently analyze data and create comprehensive analysis plans."></span>
+								<select id="mode">
+									<option value="auto" selected>Auto</option>
+									<option value="manual">Manual</option>
+									<option value="ai_agent">AI Agent</option>
+								</select>
+							</label>
+							<label>
+								<input id="autoExclude" type="checkbox" checked /> Auto-exclude totals/subtotals
+								<span class="tooltip" data-tooltip="Automatically detect and exclude rows that appear to be totals or subtotals from aggregations."></span>
+							</label>
+							<button id="editRolesBtn" style="display:none">
+								Edit column roles
+								<span class="tooltip tooltip-wide" data-tooltip="Override automatic column role detection. Change how columns are classified: metric (numbers for calculation), dimension (categories for grouping), date, id, or ignore."></span>
+							</button>
+							<button id="addAggBtn" style="display:none">
+								Add aggregate
+								<span class="tooltip" data-tooltip="Create custom aggregations by selecting specific groupBy and metric combinations."></span>
+							</button>
+							<button id="clearManualBtn" style="display:none">
+								Clear manual
+								<span class="tooltip" data-tooltip="Reset all manual overrides and return to automatic mode."></span>
+							</button>
+							<button id="recalcBtn" style="display:none">Recalculate with roles
+								<span class="tooltip" data-tooltip="Regenerate aggregates using current role assignments."></span>
+							</button>
+							
+							<button id="autoBtn">Generate Cards
+								<span class="tooltip tooltip-wide" data-tooltip="Automatically analyze your CSV data and create up to 10 interactive charts and data tables based on detected patterns and relationships."></span>
+							</button>
+							<span class="tag">Up to 10 aggregates</span>
+						</div>
+						<div class="bar" style="margin-top:8px">
+							<label>
+								Completeness threshold:
+								<span class="tooltip" data-tooltip="Minimum non-null percentage for a column to be used as a dimension (0.0-1.0)."></span>
+								<input id="completenessThreshold" type="number" min="0" max="1" step="0.1" value="0.6" style="width:80px" />
+							</label>
+							<label>
+								Cardinality limit (ratio):
+								<span class="tooltip" data-tooltip="Maximum unique values as a fraction of total rows for a column to be used as a dimension (0.0-1.0)."></span>
+								<input id="cardinalityLimitRatio" type="number" min="0" max="1" step="0.1" value="0.5" style="width:80px" />
+							</label>
+							<label>
+								Cardinality limit (absolute):
+								<span class="tooltip" data-tooltip="Maximum absolute number of unique values for a column to be used as a dimension."></span>
+								<input id="cardinalityAbsoluteLimit" type="number" min="1" value="100" style="width:80px" />
+							</label>
+						</div>
+					</div>
+				</div>
+				
+				<div class="section" id="ai-todo-list-section" style="display: none;" data-section-id="ai-workflow">
+					<div class="section-header">
+						<h3>AI Task Workflow</h3>
+					</div>
+					<div class="section-content" id="section-content-ai-workflow">
+						<div id="ai-progress-bar-container">
+							<div id="ai-progress-bar"></div>
+						</div>
+						<div id="ai-current-task-details"></div>
+						<ul id="ai-todo-list"></ul>
+					</div>
+				</div>
+				
+				<div class="section" data-section-id="aggregates">
+					<div class="section-header">
+						<h3>Aggregates</h3>
+					</div>
+					<div class="section-content" id="section-content-aggregates">
+						<div id="results" class="grid"></div>
+					</div>
+				</div>
+				
+				<div class="section" id="ai-summary-section" style="display: none;" data-section-id="ai-summary">
+					<div class="section-header">
+						<div class="section-title-group">
+							<h3>AI Summary</h3>
+							<button id="regenerate-summary-btn" class="regenerate-btn" title="Regenerate AI Summary">
+								🔄 Regenerate
+							</button>
+						</div>
+					</div>
+					<div class="section-content" id="section-content-ai-summary">
+						<div id="ai-summary-content">
+							<div id="ai-summary-loading" style="display: none;">
+								<p>🤖 Generating final summary...</p>
+								<div class="loading-spinner"></div>
+							</div>
+							<div id="ai-summary-text"></div>
+						</div>
+					</div>
+				</div>
+				
+				<div class="section" id="ai-analysis-section" style="display: none;" data-section-id="ai-analysis">
+					<div class="section-header">
+						<div class="section-title-group">
+							<h3>AI Analysis Chat</h3>
+							<button id="refresh-context-btn" class="regenerate-btn" title="Refresh Context">
+								🔄 Refresh Context
+							</button>
+							<button id="clear-chat-btn" class="clear-btn" title="Clear Chat History">
+								🗑️ Clear
+							</button>
+						</div>
+					</div>
+					<div class="section-content" id="section-content-ai-analysis">
+						<div id="ai-chat-container">
+							<div id="context-status" class="context-status">
+								<span class="context-indicator">📊</span>
+								<span class="context-text">Context: Ready</span>
+								<button id="toggle-context-details" class="context-toggle" title="Show context details">
+									▼
+								</button>
+							</div>
+							<div id="context-details" class="context-details" style="display: none;">
+								<div class="context-summary">
+									<div id="charts-count">Charts: 0</div>
+									<div id="context-last-updated">Last updated: Never</div>
+								</div>
+								<div class="context-breakdown">
+									<div class="context-section">
+										<div class="context-section-title">📊 Chart Data</div>
+										<div id="chart-breakdown-list"></div>
+									</div>
+									<div class="context-section">
+										<div class="context-section-title">🤖 AI Explanations</div>
+										<div id="explanation-breakdown"></div>
+									</div>
+									<div class="context-section">
+										<div class="context-section-title">📋 AI Summary</div>
+										<div id="summary-breakdown"></div>
+									</div>
+									<div class="context-section">
+										<div class="context-section-title">📈 Dataset Info</div>
+										<div id="dataset-breakdown"></div>
+									</div>
+								</div>
+							</div>
+							<div id="chat-messages" class="chat-messages">
+								<div class="welcome-message">
+									<div class="ai-message">
+										<div class="message-avatar">🤖</div>
+										<div class="message-content">
+											<p>Hello! I'm your AI assistant for data analysis. I have access to your current charts, aggregations, and data patterns. Ask me anything about your data!</p>
+										</div>
+									</div>
+								</div>
+							</div>
+							<div id="chat-input-container" class="chat-input-container">
+								<div id="chat-typing-indicator" class="typing-indicator" style="display: none;">
+									<span class="typing-dots">
+										<span></span>
+										<span></span>
+										<span></span>
+									</span>
+									AI is typing...
+								</div>
+								<div class="chat-input-area">
+									<textarea id="chat-input" class="chat-input" placeholder="Ask about your data analysis, charts, or patterns..." rows="1"></textarea>
+									<button id="send-chat-btn" class="send-btn" title="Send message" disabled>
+										<span class="send-icon">➤</span>
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				
+				<div class="section" data-section-id="raw-data">
+					<div class="section-header">
+						<h3>Raw Data</h3>
+					</div>
+					<div class="section-content" id="section-content-raw-data">
+						<div class="table-controls">
+							<label>Search: <input id="searchInput" type="text" placeholder="type to filter across all columns" style="min-width:260px"></label>
+							<label>Rows per page:
+								<select id="rowsPerPage">
+									<option>10</option>
+									<option selected>25</option>
+									<option>50</option>
+									<option>100</option>
+								</select>
+							</label>
+							<div class="pager">
+								<button id="prevPage">Prev</button>
+								<span class="count" id="pageInfo">Page 1 / 1</span>
+								<button id="nextPage">Next</button>
+							</div>
+							<span class="count" id="rowInfo">Showing 0–0 of 0</span>
+							<button id="downloadFiltered">Download filtered CSV</button>
+							<button id="resetExclusion">Reset auto-exclusion</button>
+						</div>
+						<div class="data-table-wrap">
+							<table id="dataTable">
+								<thead id="dataThead"></thead>
+								<tbody id="dataTbody"></tbody>
+								<tfoot id="dataTFoot"></tfoot>
+							</table>
+						</div>
+					</div>
+				</div>
+				
+				<div class="section" data-section-id="schema-info">
+					<div class="section-header">
+						<h3>Schema / Parser Info</h3>
+					</div>
+					<div class="section-content" id="section-content-schema-info">
+						<pre id="schema" class="muted" style="white-space:pre-wrap;margin:0"></pre>
+					</div>
+				</div>
+				
+			</div>
+			
+			<!-- Role Editor Modal -->
+			<div id="roleModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+				<div class="modal-card">
+					<div class="modal-head">
+						<h3>Column Roles</h3>
+						<button id="closeRoleModal" aria-label="Close">Close</button>
+					</div>
+					<table class="role-table">
+						<thead>
+							<tr>
+								<th>Column</th>
+								<th>Detected Type</th>
+								<th>Unique</th>
+								<th>Role</th>
+								<th>Sample</th>
+							</tr>
+						</thead>
+						<tbody id="roleTBody"></tbody>
+					</table>
+					<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+						<button id="saveRoles">Save roles</button>
+						<div class="help-text">
+							<strong>Role Definitions:</strong>
+							<br>
+							<b>metric</b> - Numeric columns for calculations (sum, avg, count)<br>
+							<b>dimension</b> - Categories for grouping (text with limited unique values)<br>
+							<b>date</b> - Time-based fields for time series analysis<br>
+							<b>id</b> - Unique identifiers (excluded from aggregations)<br>
+							<b>ignore</b> - Columns to exclude from all processing
+						</div>
+					</div>
+				</div>
+			</div>
+			
+			<!-- Add Aggregate Modal -->
+			<div id="aggModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+				<div class="modal-card">
+					<div class="modal-head">
+						<h3>Add Aggregate</h3>
+						<button id="closeAggModal" aria-label="Close">Close</button>
+					</div>
+					<div class="bar">
+						<label>
+							Group by:
+							<span class="tooltip" data-tooltip="Column to group data by (dimension or date columns)"></span>
+							<select id="aggGroupBy"></select>
+						</label>
+						<label>
+							Date bucket:
+							<span class="tooltip tooltip-wide" data-tooltip="For date columns, group dates into time periods. Leave empty for exact dates."></span>
+							<select id="aggBucket">
+								<option value="">(none)</option>
+								<option value="day">day</option>
+								<option value="week">week</option>
+								<option value="month">month</option>
+								<option value="quarter">quarter</option>
+								<option value="year">year</option>
+							</select>
+						</label>
+						<label>
+							Metric:
+							<span class="tooltip" data-tooltip="Numeric column to aggregate (metric columns only)"></span>
+							<select id="aggMetric"></select>
+						</label>
+						<label>
+							Function:
+							<span class="tooltip tooltip-wide" data-tooltip="sum: Add all values | avg: Calculate average | count: Count non-null values | min/max: Find minimum/maximum values | distinct_count: Count unique values"></span>
+							<select id="aggFunc">
+								<option value="sum">sum</option>
+								<option value="avg">avg</option>
+								<option value="min">min</option>
+								<option value="max">max</option>
+								<option value="count">count</option>
+								<option value="distinct_count">distinct_count</option>
+							</select>
+						</label>
+					</div>
+					<div class="bar" style="margin-top:8px">
+						<label>
+							Chart:
+							<span class="tooltip tooltip-wide" data-tooltip="Auto: System chooses best chart based on data. Bar: Good for categories. Line/Area: Best for time series. Pie/Doughnut: Good for proportions of a whole."></span>
+							<select id="aggChart">
+								<option value="auto">Auto</option>
+								<option value="bar">Bar (vertical)</option>
+								<option value="hbar">Bar (horizontal)</option>
+								<option value="line">Line</option>
+								<option value="area">Area</option>
+								<option value="pie">Pie</option>
+								<option value="doughnut">Doughnut</option>
+								<option value="polarArea">Polar Area</option>
+								<option value="radar">Radar</option>
+							</select>
+						</label>
+						<label>
+							Top-N:
+							<span class="tooltip tooltip-wide" data-tooltip="Limit pie/doughnut charts to top N categories by value. Remaining items grouped as 'Others'. Helps with readability when there are many small categories."></span>
+							<input id="aggTopN" type="number" min="3" max="999" value="20" style="width:90px" />
+							<span class="muted small" style="display:block">Max items for pie/doughnut charts (3-999, default: 20)</span>
+						</label>
+						<button id="addAggConfirm">Add</button>
+					</div>
+					<div class="help-text">
+						<strong>Tips:</strong>
+						• Use date columns with time buckets for time series analysis
+						• Combine categories (dimensions) with numeric metrics for comparison charts
+						• Count function works with any column type for frequency analysis
+						• Try different chart types to find the best visualization for your data
+					</div>
+				</div>
+			</div>
+			
+			<!-- History Management Modal -->
+			<div id="historyModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+				<div class="modal-card">
+					<div class="modal-head">
+						<h3>Manage History</h3>
+						<button id="closeHistoryModal" aria-label="Close">Close</button>
+					</div>
+					<div style="display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border);">
+						<input type="checkbox" id="history-select-all" />
+						<label for="history-select-all">Select All</label>
+					</div>
+					<div id="history-management-list" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; padding-top: 8px;">
+						<!-- History items will be populated here -->
+					</div>
+					<div class="card-foot" style="justify-content: space-between;">
+						<button id="deleteSelectedBtn" disabled style="background: #fca5a5; color: #7f1d1d; border: 1px solid #f87171;">Delete Selected</button>
+						<button id="clearAllHistoryBtn" style="background: #ef4444; color: white; border: none;">Clear All History</button>
+					</div>
+				</div>
+			</div>
+			
+			<!-- Removed Rows Modal -->
+			<div id="removedRowsModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+				<div class="modal-card">
+					<div class="modal-head">
+						<h3>Rows Removed by minGroupShare</h3>
+						<button id="closeRemovedRowsModal" aria-label="Close">Close</button>
+					</div>
+					<div class="data-table-wrap" style="max-height: 60vh;">
+						<table id="removedRowsTable" class="role-table">
+							<thead></thead>
+							<tbody></tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+			
+			
+			<!-- AI Settings Modal -->
+			<div id="aiSettingsModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+				<div class="modal-card">
+					<div class="modal-head">
+						<h3>AI Settings</h3>
+						<button id="closeAiSettingsModal" aria-label="Close">Close</button>
+					</div>
+					<div style="padding: 16px;">
+						<div style="margin-bottom: 16px;">
+							<label for="apiKeyInput" style="display: block; margin-bottom: 8px; font-weight: 500;">
+								Gemini API Key:
+							</label>
+							<input type="password" id="apiKeyInput" placeholder="Enter your Gemini API key..." style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px;" />
+							<small style="color: var(--muted); margin-bottom: 16px; display: block;">
+								Your API key will be stored locally in your browser and never sent to our servers.
+							</small>
+						</div>
+						
+						<div style="margin-bottom: 16px;">
+							<label for="modelSelect" style="display: block; margin-bottom: 8px; font-weight: 500;">
+								Model:
+							</label>
+							<select id="modelSelect" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: white;" >
+								<option value="gemini-2.5-flash" selected>Gemini 2.5 Flash (Fast & Efficient)</option>
+								<option value="gemini-2.5-pro">Gemini 2.5 Pro (Advanced Reasoning)</option>
+								<option value="gemma-3-27b-it">Gemma 3 27B</option>
+							</select>
+						</div>
+						
+						<div style="margin-bottom: 16px;">
+							<label for="languageSelect" style="display: block; margin-bottom: 8px; font-weight: 500;">
+								Response Language:
+							</label>
+							<select id="languageSelect" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: white;">
+								<option value="English" selected>English</option>
+								<option value="Mandarin">Mandarin</option>
+								<option value="Spanish">Spanish</option>
+								<option value="French">French</option>
+								<option value="German">German</option>
+								<option value="Japanese">Japanese</option>
+								<option value="Korean">Korean</option>
+								<option value="Russian">Russian</option>
+								<option value="Arabic">Arabic</option>
+								<option value="Portuguese">Portuguese</option>
+								<option value="Italian">Italian</option>
+								<option value="Dutch">Dutch</option>
+								<option value="Hindi">Hindi</option>
+								<option value="Turkish">Turkish</option>
+								<option value="Vietnamese">Vietnamese</option>
+								<option value="Polish">Polish</option>
+								<option value="Swedish">Swedish</option>
+								<option value="Thai">Thai</option>
+								<option value="Indonesian">Indonesian</option>
+								<option value="Hebrew">Hebrew</option>
+							</select>
+						</div>
+						<div style="margin-bottom: 16px;">
+							<label for="defaultModeSelect" style="display: block; margin-bottom: 8px; font-weight: 500;">
+								Default Generate Mode:
+							</label>
+							<select id="defaultModeSelect" style="width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: white;">
+								<option value="auto">Auto (Quick Analysis)</option>
+								<option value="ai_agent">AI Agent (Intelligent Analysis)</option>
+							</select>
+							<small style="color: var(--muted); display: block; margin-top: 4px;">
+								Choose which mode to use when loading CSV files
+							</small>
+						</div>
+						
+						<div style="margin-bottom: 16px;">
+							<button id="testApiBtn" style="width: 100%; padding: 10px; background: #f3f4f6; color: var(--ink); border: 1px solid var(--border); border-radius: 6px; font-weight: 500;">
+								🧪 Test API Connection
+							</button>
+							<div id="testResult" style="margin-top: 8px; padding: 8px; border-radius: 4px; display: none;"></div>
+						</div>
+						
+						<div style="display: flex; gap: 8px; justify-content: flex-end;">
+							<button id="clearApiKeyBtn" style="background: #fee2e2; color: #dc2626; border-color: #fecaca;">
+								Clear
+							</button>
+							<button id="saveApiKeyBtn" style="background: var(--accent); color: white; border-color: var(--accent);">
+								Save
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+			
+			<div id="toast-container" class="toast-container"></div>
+			<div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+			
+			<script type="module" src="./folder_ai_chart/ai_chart_ui.js"></script>
+		</main>
+		<div id="floating-tooltip" aria-hidden="true"></div>
+		<script>
+			document.addEventListener('DOMContentLoaded', () => {
+				const chatInput = document.getElementById('chat-input');
+				if (chatInput) {
+					const initialHeight = getComputedStyle(chatInput).height;
+					const expandedHeight = '120px'; // Define a larger height for focus
+					
+					// Function to expand based on content, but not less than the expanded height
+					const autoExpand = () => {
+						chatInput.style.height = 'auto'; // Reset to calculate scrollHeight correctly
+						const scrollHeight = chatInput.scrollHeight;
+						// Use the larger of the scroll height or the defined expanded height
+						chatInput.style.height = Math.max(scrollHeight, parseInt(expandedHeight)) + 'px';
+					};
+					
+					// On focus, expand to the defined larger height
+					chatInput.addEventListener('focus', () => {
+						chatInput.style.height = expandedHeight;
+						// Also run autoExpand in case there's already content
+						autoExpand();
+					});
+					
+					// On input, continue to expand with content
+					chatInput.addEventListener('input', autoExpand);
+					
+					// On blur, reset to initial height only if empty
+					chatInput.addEventListener('blur', () => {
+						if (chatInput.value.trim() === '') {
+							chatInput.style.height = initialHeight;
+						}
+					});
+				}
+				const tooltip = document.getElementById('floating-tooltip');
+				if (!tooltip) return;
+				
+				const sidebar = document.getElementById('sidebar');
+				const historyList = document.getElementById('history-list');
+				
+				if (!sidebar || !historyList) return;
+				
+				const showTooltip = (e) => {
+					if (!sidebar.classList.contains('collapsed')) return;
+					const target = e.target.closest('.history-item');
+					if (!target) return;
+					
+					const tooltipText = target.getAttribute('data-tooltip');
+					if (!tooltipText) return;
+					
+					tooltip.textContent = tooltipText;
+					tooltip.classList.add('show');
+					
+					const targetRect = target.getBoundingClientRect();
+					const tooltipRect = tooltip.getBoundingClientRect();
+					
+					tooltip.style.left = `${targetRect.right + 12}px`;
+					tooltip.style.top = `${targetRect.top + (targetRect.height / 2)}px`;
+				};
+				
+				const hideTooltip = () => {
+					tooltip.classList.remove('show');
+				};
+				
+				historyList.addEventListener('mouseover', showTooltip);
+				historyList.addEventListener('mouseout', hideTooltip);
+				historyList.addEventListener('focusin', showTooltip);
+				historyList.addEventListener('focusout', hideTooltip);
+			});
+		</script>
+	</body>
 </html>
