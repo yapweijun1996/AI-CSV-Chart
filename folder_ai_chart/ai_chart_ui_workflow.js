@@ -646,8 +646,25 @@ function setupWorkflowEventHandlers() {
                     }, 2000);
                     break;
                 case 'reset-restart':
-                    workflowDeps.WorkflowManager.reset();
-                    workflowDeps.WorkflowManager.start();
+                    {
+                        const mode = window.MODE || 'auto';
+                        if (window.safeReset) {
+                            const did = window.safeReset(mode);
+                            if (!did) {
+                                // If a workflow is running, cancel first, then reset and start
+                                workflowDeps.workflowTimer.stop();
+                                workflowDeps.WorkflowManager.cancel();
+                                setTimeout(() => {
+                                    try { window.safeReset(mode); } catch {}
+                                    try { workflowDeps.WorkflowManager.start(); } catch {}
+                                }, 50);
+                                break;
+                            }
+                        } else {
+                            workflowDeps.WorkflowManager.reset(mode);
+                        }
+                        workflowDeps.WorkflowManager.start();
+                    }
                     break;
                 case 'cancel':
                     workflowDeps.workflowTimer.stop();
@@ -764,7 +781,11 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
         document.querySelectorAll('.ai-explanation').forEach(el => el.style.display = 'none');
         // Fallback to a default, non-AI plan if necessary
         // Initialize workflow even for non-AI fallback
-        workflowDeps.WorkflowManager.reset(window.MODE);
+        if (window.safeReset) {
+            window.safeReset(window.MODE);
+        } else {
+            workflowDeps.WorkflowManager.reset(window.MODE);
+        }
         workflowDeps.WorkflowManager.start();
         workflowDeps.workflowTimer.start();
         
@@ -776,7 +797,11 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
         workflowDeps.WorkflowManager.completeTask('ai-generation', 'Using automatic plan generation.');
         return plan;
     } else {
-        workflowDeps.WorkflowManager.reset(window.MODE);
+        if (window.safeReset) {
+            window.safeReset(window.MODE);
+        } else {
+            workflowDeps.WorkflowManager.reset(window.MODE);
+        }
         workflowDeps.WorkflowManager.start();
         workflowDeps.workflowTimer.start();
         

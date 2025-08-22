@@ -31,6 +31,27 @@ const AITasks = new AITaskManager();
 // Enhanced Workflow Manager with AI Agent Integration
 const WorkflowManager = createWorkflowManager(AITasks);
 
+// Guarded reset to prevent wiping running workflows
+function safeReset(mode = 'auto') {
+  try {
+    const targetMode = mode || window.MODE || 'auto';
+    if (!WorkflowManager || typeof WorkflowManager.getState !== 'function' || typeof WorkflowManager.reset !== 'function') {
+      console.warn('safeReset: WorkflowManager not ready');
+      return false;
+    }
+    const state = WorkflowManager.getState();
+    if (state && state.status === 'running') {
+      console.log('⏸️ safeReset: Skipping reset while workflow is running', state);
+      return false;
+    }
+    WorkflowManager.reset(targetMode);
+    return true;
+  } catch (e) {
+    console.error('safeReset failed:', e);
+    return false;
+  }
+}
+window.safeReset = safeReset;
 function updateAiTodoList(data) {
     // Handle both legacy state format and new agent format
     let state;
@@ -80,7 +101,7 @@ function updateAiTodoList(data) {
         currentTaskDetails: !!currentTaskDetails,
         status,
         tasksLength: tasks.length,
-        mode: MODE
+        mode: window.MODE
     });
 
     if (!todoList || !container || !progressBar || !currentTaskDetails) {
@@ -89,7 +110,7 @@ function updateAiTodoList(data) {
     }
 
     // Don't hide section for AI Agent mode when agent is running (tasks may still be loading)
-    if (status === 'idle' || (tasks.length === 0 && !(MODE === 'ai_agent' && status === 'running'))) {
+    if (status === 'idle' || (tasks.length === 0 && !(window.MODE === 'ai_agent' && status === 'running'))) {
         container.style.display = 'none';
         return;
     }
@@ -103,7 +124,7 @@ function updateAiTodoList(data) {
     }
 
     // Special handling for AI Agent mode with empty tasks (loading state)
-    if (MODE === 'ai_agent' && tasks.length === 0 && status === 'running') {
+    if (window.MODE === 'ai_agent' && tasks.length === 0 && status === 'running') {
         progressBar.style.width = '0%';
         progressBar.setAttribute('aria-valuenow', 0);
         progressBar.className = 'progress-active';
@@ -337,7 +358,7 @@ function updateAiTodoList(data) {
             // Double-check the workflow is still completed and no new tasks are running
             const currentState = WorkflowManager.getState();
             // Don't hide during AI Agent mode - tasks may still be loading
-            if (currentState.status === 'completed' && MODE !== 'ai_agent') {
+            if (currentState.status === 'completed' && window.MODE !== 'ai_agent') {
                 console.log('🫥 Hiding completed workflow section');
                 container.style.display = 'none';
             } else {
@@ -577,6 +598,7 @@ function forceAutoSave(reason = 'manual-action') {
 window.forceAutoSave = forceAutoSave;
 window.debouncedAutoSave = debouncedAutoSave;
 window.getAiAnalysisPlan = getAiAnalysisPlan;
+window.getIntelligentAiAnalysisPlan = getIntelligentAiAnalysisPlan;
 
 /* ========= state ========= */
 let ROWS=null, PROFILE=null, LAST_PARSE_META=null;
@@ -587,6 +609,7 @@ let ROW_EXCLUSION_REASONS = {}; // Map of rowIndex to reason string
 let AUTO_EXCLUDE = true;
 
 let MODE = 'auto';
+window.MODE = MODE;
 let MANUAL_ROLES = {};   // { colName: 'dimension'|'metric'|'date'|'id'|'ignore' }
 let MANUAL_JOBS  = [];   // [{groupBy, metric, agg, chart, topN, dateBucket?}]
 let CURRENCY_TOKENS = ['MYR','RM','Malaysian Ringgit','USD','US Dollar','SGD','SG Dollar','EUR','Euro','GBP','British Pound','JPY','Japanese Yen','CNY','Chinese Yuan','AUD','Australian Dollar','CAD','Canadian Dollar','CHF','Swiss Franc','HKD','Hong Kong Dollar','INR','Indian Rupee','KRW','South Korean Won','THB','Thai Baht','VND','Vietnamese Dong','PHP','Philippine Peso','IDR','Indonesian Rupiah'];
@@ -1182,9 +1205,15 @@ function openRoleEditor(){
     tr.append(tdName, tdType, tdUniq, tdRole, tdSample); tb.appendChild(tr);
   });
   modal.classList.add('open');
+  modal.setAttribute('aria-hidden','false');
   modal.focus();
 }
-$('#closeRoleModal').onclick = ()=> $('#roleModal').classList.remove('open');
+$('#closeRoleModal').onclick = ()=>{
+  const modal = $('#roleModal');
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden','true');
+  try { document.getElementById('editRolesBtn')?.focus(); } catch {}
+};
 $('#saveRoles').onclick = ()=>{
   MANUAL_ROLES = {};
   $('#roleTBody').querySelectorAll('select').forEach(sel=>{ MANUAL_ROLES[ sel.getAttribute('data-col') ] = sel.value; });
@@ -1265,8 +1294,14 @@ function openAddAgg(){
   gb.addEventListener('change', setBucketAvailability);
 
   modal.classList.add('open');
+  modal.setAttribute('aria-hidden','false');
 }
-$('#closeAggModal').onclick = ()=> $('#aggModal').classList.remove('open');
+$('#closeAggModal').onclick = ()=>{
+  const modal = $('#aggModal');
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden','true');
+  try { document.getElementById('addAggBtn')?.focus(); } catch {}
+};
 $('#addAggConfirm').onclick = ()=>{
   const groupBy = $('#aggGroupBy').value;
   const metricRaw  = $('#aggMetric').value;
@@ -1294,7 +1329,8 @@ $('#addAggConfirm').onclick = ()=>{
   }
 
   MANUAL_JOBS.push({ groupBy, metric, agg, chart, topN, dateBucket });
-  $('#aggModal').classList.remove('open');
+  { const modal = $('#aggModal'); modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); }
+  try { document.getElementById('addAggBtn')?.focus(); } catch {}
 
   // If in Manual mode, build and append just this card immediately without restarting the workflow
   if (MODE === 'manual') {
@@ -1376,7 +1412,7 @@ $('#loadBtn').onclick = async ()=>{
     $('#mode').value = smart;
     switchMode(smart);
     loadState(); // restore per-header state if available
-    WorkflowManager.reset(MODE); // Reset AI todo list on new load
+    safeReset(window.MODE); // Reset AI todo list on new load (guarded)
     showToast('CSV data loaded successfully.', 'success');
 
     // Auto-save the initial load as a new history item
@@ -1446,6 +1482,8 @@ $('#file').onchange = () => $('#loadBtn').click();
 
 function switchMode(val){
   MODE = val;
+  window.MODE = MODE;
+  console.log('🔁 Mode switched to', window.MODE);
   const manual = MODE==='manual';
   $('#editRolesBtn').style.display = manual ? '' : 'none';
   $('#addAggBtn').style.display   = manual ? '' : 'none';
@@ -2139,7 +2177,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         }
 
         if (chartsSnapshot && chartsSnapshot.length > 0) {
-            WorkflowManager.reset();
+            safeReset(window.MODE);
             for (const cardSnap of chartsSnapshot) {
                 const jobKey = cardSnap.cardJobKey || {};
                 const result = await buildAggCard(jobKey, cardSnap);
@@ -2396,7 +2434,22 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
 /* ========= Modal accessibility: ESC & backdrop ========= */
 document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ document.querySelectorAll('.modal.open').forEach(m=>m.classList.remove('open')); }});
 
-['roleModal','aggModal', 'historyModal', 'removedRowsModal', 'aiSettingsModal'].forEach(id=>{ const m = document.getElementById(id); m?.addEventListener('click', (e)=>{ if (e.target===m) m.classList.remove('open'); }); });
+['roleModal','aggModal', 'historyModal', 'removedRowsModal', 'aiSettingsModal'].forEach(id=>{
+  const m = document.getElementById(id);
+  m?.addEventListener('click', (e)=>{
+    if (e.target===m) {
+      // If focus is inside an element we're about to hide from AT, move focus first
+      try {
+        if (m.contains(document.activeElement)) {
+          const fallback = document.getElementById('mode') || document.getElementById('sidebar-toggle') || document.body;
+          if (fallback && typeof fallback.focus === 'function') fallback.focus();
+        }
+      } catch {}
+      m.classList.remove('open');
+      m.setAttribute('aria-hidden','true');
+    }
+  });
+});
 $('#closeRemovedRowsModal').onclick = () => $('#removedRowsModal').classList.remove('open');
 
 /* ========= Manual Save Handlers ========= */
@@ -3060,7 +3113,7 @@ async function loadHistoryState(id) {
         console.log('🤖 Starting sequential AI explanation generation for cards missing it...');
         // Step 2: Sequentially update the workflow UI and generate explanations
         console.log('🤖 Starting sequential UI update and AI explanation generation...');
-        WorkflowManager.reset('auto');
+        safeReset('auto');
         WorkflowManager.start();
 
         // Use small delays to make the UI progression feel natural
@@ -3218,6 +3271,7 @@ async function openHistoryManager() {
   
   listContainer.innerHTML = 'Loading...';
   modal.classList.add('open');
+  modal.setAttribute('aria-hidden','false');
 
   try {
     const historyItems = await Store.listHistory();
@@ -3312,7 +3366,12 @@ async function openHistoryManager() {
 }
 
 $('#manageHistoryBtn').onclick = openHistoryManager;
-$('#closeHistoryModal').onclick = () => $('#historyModal').classList.remove('open');
+$('#closeHistoryModal').onclick = () => {
+  const modal = $('#historyModal');
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden','true');
+  try { document.getElementById('manageHistoryBtn')?.focus(); } catch {}
+};
 
 $('#deleteSelectedBtn').onclick = async () => {
   const selected = document.querySelectorAll('#history-management-list .history-item-checkbox:checked');
@@ -3578,7 +3637,7 @@ window.addEventListener('message', async (event) => {
         const smart = getDefaultMode();
         $('#mode').value = smart;
         switchMode(smart);
-        WorkflowManager.reset(MODE); // Clear AI todo list on new load
+        safeReset(window.MODE); // Clear AI todo list on new load (guarded)
         
         // Enable other buttons
         $('#updateReportBtn').disabled = false;
@@ -4128,14 +4187,13 @@ window.addEventListener('load', () => {
       // Prepare context for AI
       const contextPrompt = `
 System: You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
-Your role is to brief me (the CEO) on the following dataset and chart analysis. 
-You deliver insights in a polished, authoritative, and business-oriented tone — suitable for executive decision-making.
+You speak with me in a polished, authoritative, and business-oriented tone, as if briefing the CEO in conversation.
 
 Tone:
 - Executive-level: confident, concise, and professional.  
-- Polished: structured like a boardroom briefing.  
-- Action-oriented: focus on what matters for leadership, not raw technical detail.  
-- No filler, no casual phrasing. Deliver clarity and impact.  
+- Conversational: natural back-and-forth, not just long reports.  
+- Action-oriented: highlight what matters for leadership.  
+- Polished: maintain professionalism, but keep it interactive.  
 
 === DATASET OVERVIEW ===
 ${context.dataset ? `
@@ -4196,18 +4254,20 @@ ${context.summary.substring(0, 500)}${context.summary.length > 500 ? '...' : ''}
 ${userMessage}
 
 Task:
-Provide a structured executive response that includes:  
-1. **ERP Perspective** — operational efficiency, finance, or supply chain impacts.  
-2. **CRM Perspective** — customer trends, sales behavior, or retention insights.  
-3. **Analytics Perspective** — anomalies, KPIs, or emerging patterns.  
-4. **Business Implications** — what this means for strategy and operations.  
-5. **Recommendations** — prioritized actions or further analyses.  
+Engage in a conversational executive briefing.  
+- Answer my question directly with clear insights.  
+- Highlight the most relevant perspectives based on the dataset. This could include ERP, CRM, finance, operations, customer behavior, or general analytics, depending on what the data supports. 
+- If a perspective (ERP/CRM/etc.) is not applicable, skip it and focus on the most meaningful insights and business implications. 
+- Always adapt your analysis dynamically to the dataset content, emphasizing what is actionable for decision-making.
+- Keep responses concise (1–10 short paragraphs or bullets).  
+- If helpful, ask me follow-up questions to clarify priorities or next steps.  
+- Always sound polished and professional, like an executive aide in discussion. 
 
 Format:
-- 10-20 short, structured paragraphs (executive briefing style).  
+- structured paragraphs (executive briefing style).  
 - Use markdown for readability.  
 - Quote specific numbers when possible.  
-- Keep the focus on decision-making impact, not raw technical details.  
+- Keep the focus on decision-making impact.
 `;
 
       // Get API key from settings (using same pattern as existing AI features)

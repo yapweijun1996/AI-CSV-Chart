@@ -100,7 +100,9 @@ if (defaultModeSelect) {
 }
   
   modal.classList.add('open');
-  modal.focus();
+  // Ensure the modal is exposed to AT before moving focus
+  modal.setAttribute('aria-hidden', 'false');
+  try { modal.focus(); } catch {}
 }
 
 export async function testGeminiAPI() {
@@ -157,7 +159,12 @@ export function initializeAiSettingsHandlers(dependencies) {
     showToast = dependencies.showToast;
 
     $('#aiSettingsBtn').onclick = openAiSettings;
-    $('#closeAiSettingsModal').onclick = () => $('#aiSettingsModal').classList.remove('open');
+    $('#closeAiSettingsModal').onclick = () => {
+        const modal = $('#aiSettingsModal');
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden','true');
+        try { $('#aiSettingsBtn')?.focus(); } catch {}
+    };
     $('#testApiBtn').onclick = testGeminiAPI;
 
     $('#saveApiKeyBtn').onclick = () => {
@@ -173,11 +180,15 @@ export function initializeAiSettingsHandlers(dependencies) {
         localStorage.setItem('default_generate_mode', defaultMode);
 
         showToast('AI settings saved successfully!', 'success');
-        $('#aiSettingsModal').classList.remove('open');
+        const modal = $('#aiSettingsModal');
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden','true');
         updateAIFeaturesVisibility();
         // Notify listeners that settings changed (e.g., summary/logic can react)
         try { window.dispatchEvent(new StorageEvent('storage', { key: 'default_generate_mode', newValue: defaultMode })); } catch(e) {}
         try { document.dispatchEvent(new CustomEvent('apiKeySaved')); } catch(e) {}
+        // Return focus to trigger button for a11y
+        try { $('#aiSettingsBtn')?.focus(); } catch {}
     };
 
     $('#clearApiKeyBtn').onclick = () => {
