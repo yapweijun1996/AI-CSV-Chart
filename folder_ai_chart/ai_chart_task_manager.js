@@ -183,8 +183,30 @@ export class AITaskManager {
             return false;
         }
         
-        // Find task by exact description match
-        const task = agent.todos.find(t => t.description === description && t.status === 'pending');
+        // First try exact description match
+        let task = agent.todos.find(t => t.description === description && (t.status === 'pending' || t.status === 'in-progress'));
+        
+        // If no exact match, try partial matching for AI explanation tasks
+        if (!task && description.includes('Generating AI explanation for') && description.includes('analysis')) {
+            const groupByMatch = description.match(/Generating AI explanation for (.+?) analysis/);
+            if (groupByMatch) {
+                const groupBy = groupByMatch[1];
+                task = agent.todos.find(t => 
+                    t.description.includes('Generating AI explanation for') && 
+                    t.description.includes(`${groupBy} analysis`) && 
+                    (t.status === 'pending' || t.status === 'in-progress')
+                );
+            }
+        }
+        
+        // If still no match, try finding by type for workflow completion tasks
+        if (!task && (description.includes('Completing AI Agent') || description === 'Completing AI Agent analysis workflow')) {
+            task = agent.todos.find(t => 
+                t.type === 'workflow-completion' && 
+                (t.status === 'pending' || t.status === 'in-progress')
+            );
+        }
+        
         if (task) {
             task.status = 'completed';
             task.message = message;
@@ -196,12 +218,16 @@ export class AITaskManager {
                 delete task.timeoutId;
             }
             
-            console.log(`✅ TaskManager: Task completed by description "${description}" for agent ${agentId}`);
+            console.log(`✅ TaskManager: Task completed by description "${description}" -> "${task.description}" for agent ${agentId}`);
             this.notify();
             return true;
         } else {
-            console.warn(`⚠️ TaskManager.completeTaskByDescription: Task not found with description "${description}" for agent ${agentId}`);
-            console.log(`🔍 Available pending tasks:`, agent.todos.filter(t => t.status === 'pending').map(t => t.description));
+            // Don't warn for tasks that may have already been completed or don't exist
+            const pendingTasks = agent.todos.filter(t => t.status === 'pending' || t.status === 'in-progress');
+            if (pendingTasks.length > 0) {
+                console.warn(`⚠️ TaskManager.completeTaskByDescription: Task not found with description "${description}" for agent ${agentId}`);
+                console.log(`🔍 Available pending/in-progress tasks:`, pendingTasks.map(t => t.description));
+            }
             return false;
         }
     }
@@ -424,7 +450,6 @@ export class AITaskManager {
 
 export function createWorkflowManager(aiTasks) {
     let currentAgentId = null;
-    let legacyMode = true; // For backward compatibility
     let lastStatus = null; // For debug logging
     
     return {
@@ -453,11 +478,9 @@ export function createWorkflowManager(aiTasks) {
                 // For AI Agent mode, create an empty agent that will be populated by AITasks.loadPlan()
                 currentAgentId = aiTasks.createAgent('main_agent', 'AI Agent Analysis', []);
                 console.log(`🔄 WorkflowManager: Created empty AI Agent: ${currentAgentId}`);
-                legacyMode = false;
             } else {
                 currentAgentId = aiTasks.createLegacyWorkflow(mode);
                 console.log(`🔄 WorkflowManager: New legacy agent created: ${currentAgentId}`);
-                legacyMode = true;
             }
         },
 
@@ -473,21 +496,50 @@ export function createWorkflowManager(aiTasks) {
 
         completeTask(taskId, message = null, followUpTasks = []) {
             if (currentAgentId) {
-                // In legacy mode, find task by description matching taskId
                 const agent = aiTasks.agentTasks.get(currentAgentId);
                 if (agent) {
-                    const task = agent.todos.find(t => t.type === taskId) || 
-                                agent.todos.find(t => t.description.toLowerCase().includes(taskId.toLowerCase()));
+                    // For AI agent mode, try different matching strategies
+                    let task = null;
+                    
+                    // 1. First try exact type match (legacy mode)
+                    task = agent.todos.find(t => t.type === taskId && (t.status === 'pending' || t.status === 'in-progress'));
+                    
+                    // 2. If no exact type match, try description matching
+                    if (!task) {
+                        task = agent.todos.find(t => t.description.toLowerCase().includes(taskId.toLowerCase()) && (t.status === 'pending' || t.status === 'in-progress'));
+                    }
+                    
+                    // 3. Special handling for AI agent workflow task IDs that don't have direct equivalents
+                    if (!task) {
+                        if (taskId === 'ai-analysis' || taskId === 'completion') {
+                            // For AI agent mode, these legacy task IDs don't exist, so just log and return
+                            console.log(`🔄 WorkflowManager.completeTask: Skipping legacy task ID "${taskId}" in AI agent mode`);
+                            return;
+                        } else if (taskId === 'rendering') {
+                            // Try to find any chart-generation or general rendering task
+                            task = agent.todos.find(t => 
+                                (t.type === 'chart-generation' || t.description.toLowerCase().includes('render')) && 
+                                (t.status === 'pending' || t.status === 'in-progress')
+                            );
+                        }
+                    }
+                    
                     if (task) {
-                        console.log(`✅ WorkflowManager.completeTask: ${taskId} (${task.description})`);
+                        console.log(`✅ WorkflowManager.completeTask: ${taskId} -> "${task.description}" (${task.type})`);
                         aiTasks.completeTask(currentAgentId, task.id, message, followUpTasks);
                         const nextTask = aiTasks.startNextTask(currentAgentId);
                         if (!nextTask) {
                             console.log(`🎯 WorkflowManager: No more tasks for ${taskId}, checking completion...`);
                         }
                     } else {
-                        console.warn(`⚠️ WorkflowManager.completeTask: Task not found: ${taskId}`);
-                        console.log(`🔍 Available tasks:`, agent.todos.map(t => `${t.type}:${t.status}`));
+                        // Only warn if there are actually pending tasks that might have been missed
+                        const pendingTasks = agent.todos.filter(t => t.status === 'pending' || t.status === 'in-progress');
+                        if (pendingTasks.length > 0) {
+                            console.warn(`⚠️ WorkflowManager.completeTask: Task not found: ${taskId}`);
+                            console.log(`🔍 Available pending/in-progress tasks:`, pendingTasks.map(t => `${t.type}:${t.status} - ${t.description}`));
+                        } else {
+                            console.log(`🔄 WorkflowManager.completeTask: Task "${taskId}" not found, but no pending tasks remaining`);
+                        }
                     }
                 } else {
                     console.warn(`⚠️ WorkflowManager.completeTask: Agent not found for ${taskId}`);
@@ -619,7 +671,6 @@ export function createWorkflowManager(aiTasks) {
 
         // New AI Agent Methods
         createAgent(name, initialTasks = []) {
-            legacyMode = false;
             return aiTasks.createAgent(`agent_${Date.now()}`, name, initialTasks);
         },
 

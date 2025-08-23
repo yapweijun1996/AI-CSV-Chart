@@ -283,15 +283,29 @@ export function updateAiTodoList(data) {
     // Add enhanced API call statistics if available
     let apiStats = '';
     if (state.apiCalls && state.apiCalls.length > 0) {
-        const totalCalls = state.apiCalls.length;
-        const completedCalls = state.apiCalls.filter(([, call]) => call.status === 'completed').length;
-        const failedCalls = state.apiCalls.filter(([, call]) => call.status === 'failed').length;
-        const pendingCalls = state.apiCalls.filter(([, call]) => call.status === 'pending').length;
-        const retryCalls = state.apiCalls.filter(([, call]) => call.status === 'retrying').length;
-        
+        // Normalize apiCalls entries to handle both [id, call] tuples and call objects
+        const apiEntries = (Array.isArray(state.apiCalls) ? state.apiCalls : []).map(entry => {
+            // Accept either [id, call] or { id, ...callProps } or call object directly
+            if (Array.isArray(entry) && entry.length >= 2) {
+                return { id: String(entry[0]), call: entry[1] };
+            }
+            if (entry && typeof entry === 'object' && entry.status !== undefined) {
+                // entry looks like a call object
+                return { id: entry.id ? String(entry.id) : '', call: entry };
+            }
+            // fallback: keep raw
+            return { id: '', call: entry };
+        });
+
+        const totalCalls = apiEntries.length;
+        const completedCalls = apiEntries.filter(e => e.call && e.call.status === 'completed').length;
+        const failedCalls = apiEntries.filter(e => e.call && e.call.status === 'failed').length;
+        const pendingCalls = apiEntries.filter(e => e.call && e.call.status === 'pending').length;
+        const retryCalls = apiEntries.filter(e => e.call && e.call.status === 'retrying').length;
+
         // Find most recent active call for additional context
-        const activeCalls = state.apiCalls.filter(([, call]) => call.status === 'pending' || call.status === 'retrying');
-        const recentActiveCall = activeCalls.length > 0 ? activeCalls[activeCalls.length - 1][1] : null;
+        const activeCalls = apiEntries.filter(e => e.call && (e.call.status === 'pending' || e.call.status === 'retrying'));
+        const recentActiveCall = activeCalls.length > 0 ? activeCalls[activeCalls.length - 1].call : null;
         
         // Calculate success rate
         const successRate = totalCalls > 0 ? Math.round((completedCalls / totalCalls) * 100) : 0;
