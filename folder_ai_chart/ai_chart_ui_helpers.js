@@ -6,7 +6,7 @@ import { showToast } from './ai_chart_toast_system.js';
 import { GeminiAPI, workflowTimer } from './ai_chart_engine.js';
 import { getErpAnalysisPriority } from './ai_chart_erp_logic.js';
 import { applyMasonryLayout } from './ai_chart_masonry.js';
-import { renderExplanationCard, generateExplanation, runAiWorkflow, checkAndGenerateAISummary } from './ai_chart_ui_workflow.js';
+import { renderExplanationCard, generateExplanation, runAiWorkflow, checkAndGenerateAISummary, updateAiTodoList } from './ai_chart_ui_workflow.js';
 
 // Helper functions extracted from ai_chart_ui.js
 // This file contains the largest, most complex functions dealing with DOM manipulation and AI integration
@@ -688,7 +688,14 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                             if (MODE() === 'ai_agent' && plan.planType === 'intelligent-analysis') {
                                 const chartTaskDescription = `Building ${job.agg === 'count' ? 'bar chart' : job.agg === 'sum' || job.agg === 'avg' ? 'bar chart' : 'data table'}: ${job.agg}(${job.metric}) by ${job.groupBy}`;
                                 console.log(`✅ Completing AI Agent chart task: ${chartTaskDescription}`);
-                                AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), chartTaskDescription);
+                                try {
+                                    const completed = AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), chartTaskDescription);
+                                    if (!completed) {
+                                        console.log(`⚠️ Chart task not found for completion: ${chartTaskDescription} - this is normal if workflow was reset`);
+                                    }
+                                } catch (error) {
+                                    console.log(`⚠️ Failed to complete chart task ${chartTaskDescription}:`, error.message);
+                                }
                             }
                         }
                     }
@@ -709,7 +716,14 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                         if (MODE() === 'ai_agent' && plan.planType === 'intelligent-analysis') {
                             const explanationTaskDescription = `Generating AI explanation for ${task.job.groupBy} analysis`;
                             console.log(`✅ Completing AI Agent explanation task: ${explanationTaskDescription}`);
-                            AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), explanationTaskDescription);
+                            try {
+                                const completed = AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), explanationTaskDescription);
+                                if (!completed) {
+                                    console.log(`⚠️ Task not found for completion: ${explanationTaskDescription} - this is normal if workflow was reset`);
+                                }
+                            } catch (error) {
+                                console.log(`⚠️ Failed to complete task ${explanationTaskDescription}:`, error.message);
+                            }
                         }
                         
                         console.log(`🔄 Triggering auto-save after explanation ${i + 1}...`);
@@ -723,7 +737,14 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 // Complete AI Agent workflow completion task if in AI Agent mode
                 if (MODE() === 'ai_agent' && plan.planType === 'intelligent-analysis') {
                     console.log('✅ Completing AI Agent workflow completion task');
-                    AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), 'Completing AI Agent analysis workflow');
+                    try {
+                        const completed = AITasks.completeTaskByDescription(WorkflowManager.getCurrentAgentId(), 'Completing AI Agent analysis workflow');
+                        if (!completed) {
+                            console.log(`⚠️ Workflow completion task not found - this is normal if workflow was reset`);
+                        }
+                    } catch (error) {
+                        console.log(`⚠️ Failed to complete workflow task:`, error.message);
+                    }
                     
                     // Ensure WorkflowManager is also completed for AI Agent mode
                     console.log('✅ Ensuring WorkflowManager completion for AI Agent mode');
@@ -791,7 +812,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     setTimeout(() => {
                         const finalState = (WorkflowManager && WorkflowManager.getState ? WorkflowManager.getState() : { status: 'idle' });
                         console.log('🔍 Final workflow state:', finalState.status, finalState.tasks.map(t => `${t.description}: ${t.status}`));
-                        window.updateAiTodoList(finalState);
+                        updateAiTodoList(finalState);
                     }, 100);
                     
                     showToast('Analysis completed successfully.', 'success');

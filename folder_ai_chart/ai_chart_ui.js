@@ -57,6 +57,135 @@ function safeReset(mode = 'auto') {
 }
 window.safeReset = safeReset;
 
+// Comprehensive UI and state reset function
+function resetUIAndState(mode = 'auto') {
+  console.log('🔄 resetUIAndState: Starting comprehensive reset');
+  
+  try {
+    // 1. Reset workflow manager (using existing safeReset)
+    const resetSuccess = safeReset(mode);
+    if (!resetSuccess) {
+      console.log('resetUIAndState: WorkflowManager not ready or busy, continuing with UI reset');
+      // If WorkflowManager is not ready, try to reset it directly when it becomes available
+      if (window.WorkflowManager && typeof window.WorkflowManager.reset === 'function') {
+        try {
+          window.WorkflowManager.reset(mode);
+          console.log('resetUIAndState: Successfully reset WorkflowManager directly');
+        } catch (e) {
+          console.log('resetUIAndState: Direct WorkflowManager reset also failed, proceeding anyway');
+        }
+      }
+      
+      // Also reset AITasks directly to clear any pending tasks
+      if (window.AITasks && typeof window.AITasks.clearAllTasks === 'function') {
+        try {
+          window.AITasks.clearAllTasks();
+          console.log('resetUIAndState: Successfully cleared AITasks');
+        } catch (e) {
+          console.log('resetUIAndState: Failed to clear AITasks:', e);
+        }
+      }
+    }
+    
+    // 2. Clear global state variables
+    window.ROWS = null;
+    window.PROFILE = null;
+    window.currentData = null;
+    window.DATA_COLUMNS = [];
+    
+    // Clear module-level variables if they exist
+    if (typeof ROWS !== 'undefined') ROWS = null;
+    if (typeof PROFILE !== 'undefined') PROFILE = null;
+    if (typeof DATA_COLUMNS !== 'undefined') DATA_COLUMNS = [];
+    
+    // 3. Clear main UI containers (preserving essential structure)
+    const resultsGrid = $('#results');
+    if (resultsGrid) {
+      // Clear chart cards but preserve the grid container
+      resultsGrid.innerHTML = '';
+    }
+    
+    // Clear AI summary section content but preserve structure
+    const aiSummarySection = $('#ai-summary-section');
+    if (aiSummarySection) {
+      aiSummarySection.style.display = 'none';
+    }
+    
+    // Clear AI summary text content but preserve the container elements
+    const aiSummaryText = $('#ai-summary-text');
+    if (aiSummaryText) {
+      aiSummaryText.innerHTML = '';
+    }
+    
+    const aiSummaryLoading = $('#ai-summary-loading');
+    if (aiSummaryLoading) {
+      aiSummaryLoading.style.display = 'none';
+    }
+    
+    // Clear AI todo list
+    const aiTodoList = $('#ai-todo-list');
+    if (aiTodoList) {
+      aiTodoList.innerHTML = '';
+    }
+    
+    const aiTodoListSection = $('#ai-todo-list-section');
+    if (aiTodoListSection) {
+      aiTodoListSection.style.display = 'none';
+    }
+    
+    // 4. Clear any existing charts (destroy Chart.js instances)
+    const canvases = document.querySelectorAll('canvas');
+    canvases.forEach(canvas => {
+      if (window.Chart?.getChart) {
+        const chart = window.Chart.getChart(canvas);
+        if (chart) {
+          chart.destroy();
+        }
+      }
+      // Clear any direct references
+      if (canvas.chart) {
+        if (typeof canvas.chart.destroy === 'function') {
+          canvas.chart.destroy();
+        }
+        canvas.chart = null;
+      }
+      if (canvas._chartInstance) {
+        if (typeof canvas._chartInstance.destroy === 'function') {
+          canvas._chartInstance.destroy();
+        }
+        canvas._chartInstance = null;
+      }
+    });
+    
+    // 5. Clear analysis cards container if it exists
+    const analysisCards = document.querySelector('.analysis-cards') || document.querySelector('#analysis-cards');
+    if (analysisCards) {
+      analysisCards.innerHTML = '';
+    }
+    
+    // 6. Clear any toast notifications related to old state
+    // Note: We don't clear all toasts as some might be relevant to the reset process
+    
+    // 7. Reset UI mode
+    const modeSelect = $('#mode');
+    if (modeSelect) {
+      modeSelect.value = mode;
+    }
+    window.MODE = mode;
+    
+    // 8. Clear session storage flags that might interfere with new state
+    sessionStorage.removeItem('isNewFileLoad');
+    
+    console.log('✅ resetUIAndState: Comprehensive reset completed successfully');
+    return true;
+    
+  } catch (error) {
+    console.error('❌ resetUIAndState: Error during reset:', error);
+    return false;
+  }
+}
+window.resetUIAndState = resetUIAndState;
+
 // Export helper functions to global window for compatibility
 window.buildAggCard = buildAggCard;
 window.getAiAnalysisPlan = getAiAnalysisPlan;
@@ -325,7 +454,13 @@ function buildRawHeader(columns){
   
   // Add data column headers
   columns.forEach(col=>{
-    const th=document.createElement('th'); th.className='sticky'; th.textContent=col;
+    const th=document.createElement('th'); 
+    th.className='sticky'; 
+    th.dataset.col = col;
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'col-title';
+    titleSpan.textContent = col;
+    th.appendChild(titleSpan);
     const s = document.createElement('span'); s.className='sort'; s.textContent='';
     th.appendChild(s);
     th.addEventListener('click', ()=>{
@@ -341,7 +476,7 @@ function buildRawHeader(columns){
 function renderSortIndicators(){
   const ths = Array.from($('#dataThead').querySelectorAll('th'));
   ths.forEach(th=>{
-    const col = th.firstChild?.nodeValue || th.childNodes[0]?.textContent || '';
+    const col = th.dataset?.col || th.querySelector('.col-title')?.textContent?.trim() || th.textContent?.trim() || '';
     const span = th.querySelector('.sort');
     if (!span) return;
     if (SORT.col===col) span.textContent = SORT.dir==='asc' ? '↑' : '↓';
@@ -887,8 +1022,12 @@ $('#addAggConfirm').onclick = ()=>{
 
 /* ========= UI glue ========= */
 $('#loadBtn').onclick = async ()=>{
-  sessionStorage.setItem('isNewFileLoad', 'true');
   const f=$('#file').files[0]; if(!f) return showToast('Choose a CSV first.', 'error');
+  
+  // Reset UI and state to ensure clean slate before loading new data
+  console.log('[Workflow] Starting new file load - resetting UI and state first');
+  resetUIAndState('auto');
+  
   $('#meta').textContent='Parsing…';
   try{
     const choice=$('#delimiter').value, header=$('#hasHeader').checked;
@@ -1459,17 +1598,9 @@ function getChartsSnapshot() {
 }
 
 async function loadHistoryState(id) {
-  const isNewFile = sessionStorage.getItem('isNewFileLoad') === 'true';
-  if (isNewFile) {
-    console.log('[Workflow] New file load detected, aborting history load and forcing fresh analysis.');
-    sessionStorage.removeItem('isNewFileLoad');
-    if (ROWS && PROFILE) {
-        renderAggregates();
-    } else {
-        showToast('Cannot perform fresh analysis: data not loaded.', 'error');
-    }
-    return;
-  }
+  // Reset UI and state to ensure clean slate before loading history
+  console.log('[Workflow] Starting history load - resetting UI and state first');
+  resetUIAndState('auto');
   const toastId = `toast-${Date.now()}`;
   showToast('Loading report... 0%', 'info', 999999, toastId);
   
@@ -2109,7 +2240,10 @@ window.addEventListener('message', async (event) => {
     // Process the CSV data
     if (csv) {
       try {
-        sessionStorage.setItem('isNewFileLoad', 'true');
+        // Reset UI and state to ensure clean slate before loading new data
+        console.log('[Workflow] Starting new file load - resetting UI and state first');
+        resetUIAndState('auto');
+        
         csvProcessed = true; // Mark as processing to prevent duplicates
         
         // The header parameter contains the report title/description (from headerTableEl)
@@ -2452,8 +2586,8 @@ window.addEventListener('load', () => {
         console.log(`🔍 Chart ${chartIndex}: canvas=${!!canvas}, hasChart=${!!(canvas && canvas.chart)}`);
         
         if (canvas) {
-          // Try multiple ways to detect chart data
-          const chartInstance = canvas.chart || canvas._chartInstance;
+          // Try multiple ways to detect chart data - use official Chart.js API first
+          const chartInstance = window.Chart?.getChart(canvas) || canvas.chart || canvas._chartInstance;
           const hasChartData = !!(chartInstance || canvas.dataset.chartType);
           
           if (chartInstance) {
