@@ -23,9 +23,7 @@ const marked = window.marked || { parse: (text) => text };
 const debounce = window.debounce || ((fn, delay) => fn);
 const debouncedAutoSave = window.debouncedAutoSave || (() => {});
 
-// Global flag to prevent concurrent executions
-let isRenderingAggregates = false;
-let pendingRender = false;
+// Use window-scoped render flags to avoid duplication with main UI
 
 // Button state management for workflow prevention
 function setGenerateButtonState(isRunning) {
@@ -43,6 +41,7 @@ function setGenerateButtonState(isRunning) {
         autoBtn.style.opacity = '1';
         autoBtn.style.cursor = 'pointer';
     }
+}
 
 async function buildAggCard(job, cardState = {}, sessionId = null, options = {}) {
     const {
@@ -600,23 +599,25 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
     }
 
      // Enhanced concurrent execution prevention
-    if (isRenderingAggregates && !retry && MODE() !== 'manual') {
+    if (window.window.isRenderingAggregates && !retry && MODE() !== 'manual') {
         console.log('⏸️ renderAggregates already running, queueing next run');
-        pendingRender = true;
+        window.window.pendingRender = true;
         return;
     }
     
     // Check WorkflowManager state for additional protection
     const WorkflowManager = window.WorkflowManager;
     const AITasks = window.AITasks;
-    const workflowState = WorkflowManager.getState();
-    if (workflowState.status === 'running' && !retry && MODE() !== 'manual') {
-        console.log('⏸️ WorkflowManager indicates workflow is running, skipping new execution');
-        showToast('Workflow is already running. Please wait for completion.', 'warning');
-        return;
+    if (WorkflowManager && typeof WorkflowManager.getState === 'function') {
+        const workflowState = (WorkflowManager && WorkflowManager.getState ? WorkflowManager.getState() : { status: 'idle' });
+        if (workflowState.status === 'running' && !retry && MODE() !== 'manual') {
+            console.log('⏸️ WorkflowManager indicates workflow is running, skipping new execution');
+            showToast('Workflow is already running. Please wait for completion.', 'warning');
+            return;
+        }
     }
     
-    isRenderingAggregates = true;
+    window.window.isRenderingAggregates = true;
     setGenerateButtonState(true); // Disable button when workflow starts
     console.log('🚀 Starting renderAggregates', { chartsSnapshot: !!chartsSnapshot, retry });
 
@@ -670,7 +671,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 const processJobsIncrementally = async () => {
                     for (let i = 0; i < plan.jobs.length; i++) {
                         const job = plan.jobs[i];
-                        if (WorkflowManager.getState().status !== 'running' || window.currentAggregationSession !== aggregationSessionId) {
+                        if ((WorkflowManager && WorkflowManager.getState ? WorkflowManager.getState() : { status: 'idle' }).status !== 'running' || window.currentAggregationSession !== aggregationSessionId) {
                             break;
                         }
                         
@@ -726,9 +727,9 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     
                     // Ensure WorkflowManager is also completed for AI Agent mode
                     console.log('✅ Ensuring WorkflowManager completion for AI Agent mode');
-                    if (WorkflowManager.getState().status === 'running') {
+                    if ((WorkflowManager && WorkflowManager.getState ? WorkflowManager.getState() : { status: 'idle' }).status === 'running') {
                         // Complete any remaining WorkflowManager tasks for AI Agent mode
-                        const currentState = WorkflowManager.getState();
+                        const currentState = (WorkflowManager && WorkflowManager.getState ? WorkflowManager.getState() : { status: 'idle' });
                         const pendingTasks = currentState.tasks.filter(t => t.status === 'pending' || t.status === 'in-progress');
                         
                         pendingTasks.forEach(task => {
@@ -742,13 +743,13 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 
                 // Mark rendering as complete now that explanations are done
                 console.log('🏁 All work including explanations completed, releasing render lock');
-                isRenderingAggregates = false;
+                window.isRenderingAggregates = false;
                 setGenerateButtonState(false); // Re-enable button when workflow completes
                 
                 // Process any pending renders
-                if (pendingRender) {
-                    const wasPending = pendingRender;
-                    pendingRender = false;
+                if (window.pendingRender) {
+                    const wasPending = window.pendingRender;
+                    window.pendingRender = false;
                     console.log('🔁 Running queued renderAggregates after explanations');
                     setTimeout(() => {
                         try { renderAggregates(null, [], 0, true); } catch (e) { console.error(e); }
@@ -766,7 +767,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                    WorkflowManager.completeTask('auto-analysis', 'Fallback analysis completed. Building cards...');
                 }
                 
-                if (WorkflowManager.getState().status === 'running') {
+                if ((WorkflowManager && WorkflowManager.getState ? WorkflowManager.getState() : { status: 'idle' }).status === 'running') {
                     // Complete rendering task only if it exists (not in ERP workflow)
                     console.log(`🔍 Checking rendering task completion: planType = ${plan.planType}`);
                     if (plan.planType !== 'erp-analysis') {
@@ -788,7 +789,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     
                     // Force a final UI update to show completion state
                     setTimeout(() => {
-                        const finalState = WorkflowManager.getState();
+                        const finalState = (WorkflowManager && WorkflowManager.getState ? WorkflowManager.getState() : { status: 'idle' });
                         console.log('🔍 Final workflow state:', finalState.status, finalState.tasks.map(t => `${t.description}: ${t.status}`));
                         window.updateAiTodoList(finalState);
                     }, 100);
@@ -839,13 +840,13 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     
                     // Release render lock for fallback path
                     console.log('🏁 Fallback plan completed, releasing render lock');
-                    isRenderingAggregates = false;
+                    window.isRenderingAggregates = false;
                     setGenerateButtonState(false); // Re-enable button after fallback
                     
                     // Process any pending renders
-                    if (pendingRender) {
-                        const wasPending = pendingRender;
-                        pendingRender = false;
+                    if (window.pendingRender) {
+                        const wasPending = window.pendingRender;
+                        window.pendingRender = false;
                         console.log('🔁 Running queued renderAggregates after fallback');
                         setTimeout(() => {
                             try { renderAggregates(null, [], 0, true); } catch (e) { console.error(e); }
@@ -854,12 +855,12 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 } else {
                     // No fallback plan available
                     console.log('🏁 No fallback plan available, releasing render lock');
-                    isRenderingAggregates = false;
+                    window.isRenderingAggregates = false;
                     setGenerateButtonState(false); // Re-enable button when no fallback available
                     
-                    if (pendingRender) {
-                        const wasPending = pendingRender;
-                        pendingRender = false;
+                    if (window.pendingRender) {
+                        const wasPending = window.pendingRender;
+                        window.pendingRender = false;
                         console.log('🔁 Running queued renderAggregates after no-plan scenario');
                         setTimeout(() => {
                             try { renderAggregates(null, [], 0, true); } catch (e) { console.error(e); }
@@ -889,7 +890,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         }, 400);
         
     } finally {
-        // Don't reset isRenderingAggregates here if explanations are still running
+        // Don't reset window.isRenderingAggregates here if explanations are still running
         // The flag will be reset after explanations complete (see explanation completion logic above)
         console.log('✅ renderAggregates main phase completed, keeping render lock for explanations');
     }

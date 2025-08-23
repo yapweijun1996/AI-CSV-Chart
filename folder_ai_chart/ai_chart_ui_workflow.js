@@ -12,28 +12,50 @@ let workflowDeps = null;
 let isInitialized = false;
 
 // AI Todo List UI & Subscription Functions
-function updateAiTodoList(data) {
+export function updateAiTodoList(data) {
     // Handle both legacy state format and new agent format
     let state;
     if (data.agents && Array.isArray(data.agents)) {
-        // New agent format - convert to legacy for backward compatibility
-        const mainAgent = data.agents.find(([id, agent]) => id.includes('main_agent'));
-        if (mainAgent) {
-            const [agentId, agent] = mainAgent;
-            const currentTaskIndex = agent.todos.findIndex(t => t.status === 'in-progress');
-            const hasError = agent.todos.some(t => t.status === 'error');
+        // Normalize agent entries (support [id,agent] tuples, {id, ...} objects, or Map entries)
+        const normalizeAgents = (agentsArr) => agentsArr.map(entry => {
+            if (!entry) return null;
+            // Tuple style: [id, agent]
+            if (Array.isArray(entry) && entry.length >= 2) {
+                return { id: String(entry[0]), agent: entry[1] };
+            }
+            // Object style: { id, ... }
+            if (typeof entry === 'object' && entry.id !== undefined) {
+                return { id: String(entry.id), agent: entry };
+            }
+            // Fallback: try to handle [ [id, agent] ] or other entries
+            try {
+                // If it's an iterator entry like Map entries
+                if (Array.isArray(entry) && entry.length === 2) {
+                    return { id: String(entry[0]), agent: entry[1] };
+                }
+            } catch {}
+            return null;
+        });
+
+        const normalized = normalizeAgents(data.agents).filter(Boolean);
+        const mainAgentEntry = normalized.find(a => a.id && a.id.toString().includes('main_agent'));
+
+        if (mainAgentEntry) {
+            const agent = mainAgentEntry.agent;
+            const currentTaskIndex = Array.isArray(agent.todos) ? agent.todos.findIndex(t => t.status === 'in-progress') : -1;
+            const hasError = Array.isArray(agent.todos) ? agent.todos.some(t => t.status === 'error') : false;
             const error = hasError ? agent.todos.find(t => t.status === 'error')?.message : null;
-            
+
             state = {
                 status: agent.status,
-                tasks: agent.todos.map(t => ({
+                tasks: Array.isArray(agent.todos) ? agent.todos.map(t => ({
                     id: t.type || t.id,
                     description: t.description,
                     status: t.status,
                     message: t.message,
                     timestamp: t.timestamp,
                     type: t.type
-                })),
+                })) : [],
                 currentTaskIndex,
                 error: error ? new Error(error) : null,
                 agents: data.agents,
@@ -207,7 +229,7 @@ function updateAiTodoList(data) {
             console.log(`📂 Added group header with !important overrides: ${type.toUpperCase()}`);
         }
         
-        typeTasks.forEach((task, index) => {
+        typeTasks.forEach((task) => {
             const li = document.createElement('li');
             li.className = `task-item task-${task.status} task-type-${task.type || 'general'}`;
             
@@ -262,13 +284,13 @@ function updateAiTodoList(data) {
     let apiStats = '';
     if (state.apiCalls && state.apiCalls.length > 0) {
         const totalCalls = state.apiCalls.length;
-        const completedCalls = state.apiCalls.filter(([id, call]) => call.status === 'completed').length;
-        const failedCalls = state.apiCalls.filter(([id, call]) => call.status === 'failed').length;
-        const pendingCalls = state.apiCalls.filter(([id, call]) => call.status === 'pending').length;
-        const retryCalls = state.apiCalls.filter(([id, call]) => call.status === 'retrying').length;
+        const completedCalls = state.apiCalls.filter(([, call]) => call.status === 'completed').length;
+        const failedCalls = state.apiCalls.filter(([, call]) => call.status === 'failed').length;
+        const pendingCalls = state.apiCalls.filter(([, call]) => call.status === 'pending').length;
+        const retryCalls = state.apiCalls.filter(([, call]) => call.status === 'retrying').length;
         
         // Find most recent active call for additional context
-        const activeCalls = state.apiCalls.filter(([id, call]) => call.status === 'pending' || call.status === 'retrying');
+        const activeCalls = state.apiCalls.filter(([, call]) => call.status === 'pending' || call.status === 'retrying');
         const recentActiveCall = activeCalls.length > 0 ? activeCalls[activeCalls.length - 1][1] : null;
         
         // Calculate success rate
@@ -315,14 +337,24 @@ function updateAiTodoList(data) {
         
         // Hide the workflow section after 5 seconds, but only if no new workflow starts
         const hideTimeout = setTimeout(() => {
-            // Double-check the workflow is still completed and no new tasks are running
-            const currentState = workflowDeps.WorkflowManager.getState();
-            // Don't hide during AI Agent mode - tasks may still be loading
-            if (currentState.status === 'completed' && window.MODE !== 'ai_agent') {
-                console.log('🫥 Hiding completed workflow section');
-                container.style.display = 'none';
-            } else {
-                console.log('🔄 Workflow reactivated, keeping section visible');
+            // Guard against null/undefined workflowDeps (race condition safety)
+            if (!workflowDeps || !workflowDeps.WorkflowManager || typeof workflowDeps.WorkflowManager.getState !== 'function') {
+                console.warn('hideTimeout: WorkflowManager unavailable — keeping workflow visible');
+                return;
+            }
+            
+            try {
+                // Double-check the workflow is still completed and no new tasks are running
+                const currentState = workflowDeps.WorkflowManager.getState();
+                // Don't hide during AI Agent mode - tasks may still be loading
+                if (currentState.status === 'completed' && window.MODE !== 'ai_agent') {
+                    console.log('🫥 Hiding completed workflow section');
+                    container.style.display = 'none';
+                } else {
+                    console.log('🔄 Workflow reactivated, keeping section visible');
+                }
+            } catch (err) {
+                console.error('hideTimeout callback error (safe guard):', err);
             }
         }, 5000);
         
@@ -452,7 +484,6 @@ function updateAiTodoList(data) {
             });
         }
     } else if (status === 'paused') {
-        const currentTime = new Date().toLocaleTimeString();
         const elapsedTime = workflowDeps.workflowTimer.getElapsed();
         statusDiv.innerHTML = `
             <div class="paused-status">

@@ -9,6 +9,7 @@ import { inferType, profile, renderProfile, inferRole, detectTemporalPatterns, d
 import { parseCsvNumber, isNum, toNum, parseDateSafe } from './ai_chart_utils.js';
 import { groupAgg, bucketDate, normalizeGroupKey, computeChartConfig, ensureChart, renderChartCard, renderAggTable, addMissingDataWarning, canonicalJobKey, deduplicateJobs, nice } from './ai_chart_aggregates.js';
 import { parseCSV, workerAggregateWithFallback, workflowTimer, apiHandler, GeminiAPI } from './ai_chart_engine.js';
+import { updateAiTodoList } from './ai_chart_ui_workflow.js';
 // Smart default mode selector
 function getDefaultMode() {
   const hasApiKey = isValidApiKey(localStorage.getItem('gemini_api_key'));
@@ -28,9 +29,11 @@ const stripBOM = s => (s && s.charCodeAt(0) === 0xFEFF) ? s.slice(1) : s;
 
 // Global AI Task Manager instance
 const AITasks = new AITaskManager();
+window.AITasks = AITasks; // Make available to helper modules
 
 // Enhanced Workflow Manager with AI Agent Integration
 const WorkflowManager = createWorkflowManager(AITasks);
+window.WorkflowManager = WorkflowManager; // Make available to helper modules
 
 // Guarded reset to prevent wiping running workflows
 function safeReset(mode = 'auto') {
@@ -113,7 +116,7 @@ function forceAutoSave(reason = 'manual-action') {
     }
     const li = document.querySelector('#history-list .history-item[data-id="' + window.currentHistoryId + '"] .name');
     const currentName = li?.textContent || 'current report';
-    console.log(`💾 Force-saving (${reason}) "\${currentName}"...`);
+    console.log(`💾 Force-saving (${reason}) "${currentName}"...`);
     saveCurrentStateToHistory(currentName, false);
   } catch (e) {
     console.error('Force save failed:', e);
@@ -283,7 +286,7 @@ function initializeRowInclusion() {
 // Get only the rows that are included for aggregation
 function getIncludedRows() {
   if (!ROWS || !ROW_INCLUDED || ROW_INCLUDED.length !== ROWS.length) {
-    return ROWS; // Fallback to all rows if inclusion array not set up
+    return Array.isArray(ROWS) ? ROWS : []; // safe fallback: always return an array
   }
   
   const includedRows = ROWS.filter((row, index) => ROW_INCLUDED[index]);
@@ -895,7 +898,7 @@ $('#loadBtn').onclick = async ()=>{
         }
     });
     if(!data.length) throw new Error('No rows detected (check delimiter/header).');
-    ROWS=data; window.currentData = data; DATA_COLUMNS = Object.keys(ROWS[0] || {});
+    ROWS=data; window.ROWS = ROWS; window.currentData = data; DATA_COLUMNS = Object.keys(ROWS[0] || {});
     const dateFormat = $('#dateFormat').value;
     PROFILE=profile(ROWS, dateFormat); window.PROFILE = PROFILE; renderProfile(PROFILE, LAST_PARSE_META);
 
@@ -1069,7 +1072,7 @@ $('#autoBtn').onclick = () => {
     }
     
     // Check if renderAggregates is already running
-    if (isRenderingAggregates) {
+    if (window.isRenderingAggregates) {
         showToast('Analysis is already in progress. Please wait for completion.', 'warning');
         return;
     }
@@ -1081,26 +1084,10 @@ $('#autoBtn').onclick = () => {
 
 // runAiWorkflow function moved to ai_chart_ui_workflow.js
 
-// Global flag to prevent concurrent executions
-let isRenderingAggregates = false;
-let pendingRender = false;
-// Button state management for workflow prevention
-function setGenerateButtonState(isRunning) {
-    const autoBtn = document.getElementById('autoBtn');
-    if (!autoBtn) return;
-    
-    if (isRunning) {
-        autoBtn.disabled = true;
-        autoBtn.textContent = 'Workflow Running...';
-        autoBtn.style.opacity = '0.6';
-        autoBtn.style.cursor = 'not-allowed';
-    } else {
-        autoBtn.disabled = false;
-        autoBtn.textContent = 'Generate Cards';
-        autoBtn.style.opacity = '1';
-        autoBtn.style.cursor = 'pointer';
-    }
-}
+// Initialize window-scoped render flags (shared with helpers)
+window.isRenderingAggregates = false;
+window.pendingRender = false;
+// Button state management for workflow prevention - moved to ai_chart_ui_helpers.js
 
 // renderAggregates moved to ai_chart_ui_helpers.js
 
@@ -1563,6 +1550,8 @@ async function loadHistoryState(id) {
     
     // Restore data
     ROWS = rows;
+    window.ROWS = ROWS; // Make ROWS accessible to helper modules
+    window.currentData = ROWS; // Ensure AI Chat has access to dataset
     DATA_COLUMNS = history.columns || [];
     LAST_PARSE_META = history.meta || {};
     PROFILE = profile(ROWS); window.PROFILE = PROFILE;
@@ -1902,6 +1891,8 @@ async function loadHistoryState(id) {
     // Rollback to previous state
     try {
       ROWS = backup.rows;
+      window.ROWS = ROWS; // Restore window access
+      window.currentData = ROWS; // Restore window access for AI Chat
       DATA_COLUMNS = backup.columns;
       LAST_PARSE_META = backup.meta;
       PROFILE = backup.profile; window.PROFILE = PROFILE;
@@ -2255,7 +2246,7 @@ window.addEventListener('message', async (event) => {
         
         // Set global variables same as loadBtn onclick
         console.log('🔧 Setting global variables...');
-        ROWS = data; window.currentData = data;
+        ROWS = data; window.ROWS = ROWS; window.currentData = data;
         DATA_COLUMNS = Object.keys(ROWS[0] || {});
         
         console.log('📊 DATA_COLUMNS:', DATA_COLUMNS);

@@ -20,10 +20,9 @@ const BACKOFF_MULTIPLIER = 2;
  * @throws {Error} Throws an error if the request fails after all retries.
  */
 export async function fetchWithRetry(apiKey, model, prompt, showToast) {
-  let attempt = 0;
+  let attempt = 1;
 
   while (attempt <= MAX_RETRIES) {
-    attempt++;
     try {
       const language = localStorage.getItem('ai_language') || 'English';
       const finalPrompt = `${prompt}\n\nPlease respond in ${language}.`;
@@ -42,12 +41,12 @@ export async function fetchWithRetry(apiKey, model, prompt, showToast) {
       }
 
       if (response.status === 429 || response.status === 503) {
-        if (attempt <= MAX_RETRIES) {
+        if (attempt < MAX_RETRIES) {
           // Different delay strategies based on error type
           let delay;
           if (response.status === 429) {
             // Rate limiting: use exponential backoff with longer delays
-            delay = Math.min(BASE_RETRY_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt), MAX_RETRY_DELAY);
+            delay = Math.min(BASE_RETRY_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt - 1), MAX_RETRY_DELAY);
           } else {
             // Service overloaded: shorter delays for faster recovery
             delay = Math.min(BASE_RETRY_DELAY * Math.pow(1.5, attempt - 1), MAX_RETRY_DELAY / 2);
@@ -63,6 +62,7 @@ export async function fetchWithRetry(apiKey, model, prompt, showToast) {
           showToast(`${statusText}. Retrying in ${Math.round(totalDelay / 1000)} seconds...`, 'info', totalDelay);
           
           await new Promise(resolve => setTimeout(resolve, totalDelay));
+          attempt++;
           continue;
         } else {
           const statusText = response.status === 429 ? 'rate limiting' : 'service unavailability';
@@ -80,7 +80,7 @@ export async function fetchWithRetry(apiKey, model, prompt, showToast) {
       const isNetworkError = error.name === 'TypeError' || error.message.includes('fetch');
       const isTimeoutError = error.message.includes('timeout') || error.code === 'ECONNRESET';
       
-      if (attempt <= MAX_RETRIES) {
+      if (attempt < MAX_RETRIES) {
         let delay;
         if (isTimeoutError) {
           // Timeout errors: use shorter delays
@@ -100,6 +100,7 @@ export async function fetchWithRetry(apiKey, model, prompt, showToast) {
         console.warn(`${errorType} error occurred. Retrying in ${Math.round(totalDelay)}ms... (Attempt ${attempt}/${MAX_RETRIES}) Error: ${error.message}`);
         showToast(`${errorType} error. Retrying in ${Math.round(totalDelay / 1000)} seconds...`, 'info', totalDelay);
         await new Promise(resolve => setTimeout(resolve, totalDelay));
+        attempt++;
       } else {
         // Enhanced error context for final failure
         const enhancedError = new Error(`API request failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`);
