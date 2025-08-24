@@ -354,17 +354,25 @@ function addChatMessage(content, isUser = false) {
   renderChatMessage(message);
   
   // Auto-save chat history to current report
-  if (window.currentHistoryId && typeof Store !== 'undefined') {
+  if (window.currentHistoryId && typeof window.Store !== 'undefined') {
     try {
-      Store.updateHistory(window.currentHistoryId, { 
+      console.log('💾 Auto-saving chat message to history...');
+      window.Store.updateHistory(window.currentHistoryId, { 
         uiSnapshot: getUiSnapshot(), 
         updatedAt: Date.now() 
+      }).then(() => {
+        console.log('✅ Chat message auto-saved successfully');
       }).catch(error => {
         console.warn('Failed to auto-save chat message:', error);
       });
     } catch (error) {
       console.warn('Failed to auto-save chat message:', error);
     }
+  } else {
+    console.warn('⚠️ Cannot auto-save chat: missing currentHistoryId or Store', {
+      hasHistoryId: !!window.currentHistoryId,
+      hasStore: typeof window.Store !== 'undefined'
+    });
   }
   
   // Scroll to bottom
@@ -581,11 +589,37 @@ Format:
     
     hideTypingIndicator();
     addChatMessage(aiResponse, false);
+    
+    // Additional auto-save as backup to ensure AI responses are preserved
+    setTimeout(() => {
+      if (window.currentHistoryId && typeof window.Store !== 'undefined') {
+        console.log('💾 Backup auto-save after AI response...');
+        window.Store.updateHistory(window.currentHistoryId, { 
+          uiSnapshot: getUiSnapshot(), 
+          updatedAt: Date.now() 
+        }).catch(error => {
+          console.warn('Failed backup auto-save after AI response:', error);
+        });
+      }
+    }, 1000); // 1 second delay to ensure the message was fully processed
 
   } catch (error) {
     console.error('Chat error:', error);
     hideTypingIndicator();
     addChatMessage(`Error: ${error.message}`, false);
+    
+    // Backup auto-save for error messages too
+    setTimeout(() => {
+      if (window.currentHistoryId && typeof window.Store !== 'undefined') {
+        console.log('💾 Backup auto-save after error message...');
+        window.Store.updateHistory(window.currentHistoryId, { 
+          uiSnapshot: getUiSnapshot(), 
+          updatedAt: Date.now() 
+        }).catch(error => {
+          console.warn('Failed backup auto-save after error message:', error);
+        });
+      }
+    }, 1000);
   }
 }
 
@@ -666,11 +700,14 @@ function initializeChat() {
       }
       
       // Auto-save the cleared chat state to history
-      if (window.currentHistoryId && typeof Store !== 'undefined') {
+      if (window.currentHistoryId && typeof window.Store !== 'undefined') {
         try {
-          Store.updateHistory(window.currentHistoryId, { 
+          console.log('💾 Auto-saving cleared chat state...');
+          window.Store.updateHistory(window.currentHistoryId, { 
             uiSnapshot: getUiSnapshot(), 
             updatedAt: Date.now() 
+          }).then(() => {
+            console.log('✅ Cleared chat state auto-saved successfully');
           }).catch(error => {
             console.warn('Failed to auto-save cleared chat:', error);
           });

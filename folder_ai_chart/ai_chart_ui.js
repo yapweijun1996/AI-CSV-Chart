@@ -1244,8 +1244,9 @@ export function getUiSnapshot() {
   };
 }
 
-// Make getUiSnapshot available globally for the chat module
+// Make getUiSnapshot and Store available globally for the chat module
 window.getUiSnapshot = getUiSnapshot;
+window.Store = Store;
 
 async function saveCurrentStateToHistory(fileName, forceNew = false) {
   if (!ROWS || !PROFILE) return;
