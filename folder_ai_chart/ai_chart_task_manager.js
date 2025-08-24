@@ -285,6 +285,16 @@ export class AITaskManager {
             agent.status = 'completed';
             console.log(`🎉 WorkflowManager: Agent ${agentId} completed all tasks`);
             this.notify();
+            
+            // Auto-save for AI AGENT mode completion
+            if (window.MODE && window.MODE === 'ai_agent') {
+                console.log('💾 Auto-saving after AI AGENT workflow completion...');
+                setTimeout(() => {
+                    if (typeof window.forceAutoSave === 'function') {
+                        window.forceAutoSave('ai-agent-task-completion');
+                    }
+                }, 500); // Wait for all completion processes to finish
+            }
         } else if (agent.todos.length === 0) {
             // Empty agent - keep it in running state until tasks are loaded
             agent.status = 'running';

@@ -817,8 +817,15 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                     
                     showToast('Analysis completed successfully.', 'success');
                     
-                    // Auto-save after successful card generation
-                    debouncedAutoSave();
+                    // Auto-save after successful card generation (force save to bypass workflow running check)
+                    console.log('💾 Force-saving after AI Agent workflow completion...');
+                    setTimeout(() => {
+                        if (typeof window.forceAutoSave === 'function') {
+                            window.forceAutoSave('ai-agent-completion');
+                        } else {
+                            debouncedAutoSave();
+                        }
+                    }, 200); // Wait for WorkflowManager state to fully update
                 }
                 setTimeout(applyMasonryLayout, 150);
                 setTimeout(applyMasonryLayout, 500);
