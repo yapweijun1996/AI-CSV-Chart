@@ -4,6 +4,7 @@
 import { fetchWithRetry } from './ai_chart_api.js';
 import { isValidApiKey } from './ai_chart_ai_settings_handlers.js';
 import { getUiSnapshot } from './ai_chart_ui.js';
+import { getClientContextPrompt } from './ai_chart_context.js';
 
 // Chat state management (make it global for snapshot saving)
 window.chatState = {
@@ -463,6 +464,9 @@ async function sendChatMessage(userMessage) {
     const contextPrompt = `
 System: You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
 You speak with me in a polished, authoritative, and business-oriented tone, as if briefing the CEO in conversation.
+Avoid starting responses with generic greetings like "Good morning", "Hello", or "Hi".
+
+${getClientContextPrompt()}
 
 Tone:
 - Executive-level: confident, concise, and professional.  

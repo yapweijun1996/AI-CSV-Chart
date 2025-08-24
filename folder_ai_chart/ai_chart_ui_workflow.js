@@ -6,6 +6,7 @@ import { fetchWithRetry } from './ai_chart_api.js';
 import * as Store from './ai_chart_store.js';
 import { addMissingDataWarning, groupAgg, computeChartConfig, ensureChart, renderChartCard, renderAggTable } from './ai_chart_aggregates.js';
 import { isValidApiKey, initializeAiSettingsHandlers } from './ai_chart_ai_settings_handlers.js';
+import { getClientContextPrompt } from './ai_chart_context.js';
 
 // Module-level state
 let workflowDeps = null;
@@ -1029,6 +1030,9 @@ export async function generateExplanation(agg, job, parentCard) {
         const prompt = `
 You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
 You brief me, delivering insights in a confident, polished, and efficient manner.
+Avoid starting responses with generic greetings like "Good morning", "Hello", or "Hi".
+
+${getClientContextPrompt()}
 
 Tone:
 - Executive-level: clear, authoritative, and professional.
@@ -1247,6 +1251,9 @@ function createSummaryPrompt(aggregateData) {
     const prompt = `
 You are my professional executive assistant with expertise in ERP systems, CRM platforms, and data analytics. 
 You brief me, delivering insights in a confident, polished, and efficient manner.
+Avoid starting responses with generic greetings like "Good morning", "Hello", or "Hi".
+
+${getClientContextPrompt()}
 
 Tone:
 - Executive-level: clear, authoritative, and professional.
