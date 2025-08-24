@@ -73,7 +73,7 @@ function selectBestMetricColumn(numericCols) {
  * @returns {string|null} Formatted bucket string or null if invalid
  */
 export function bucketDate(d, bucket) {
-  const t = parseDateSafe(d);
+  const t = parseDateSafe(d, (document.getElementById('dateFormat')?.value || 'auto'));
   if (Number.isNaN(t)) return null;
   
   const dt = new Date(t);
@@ -120,7 +120,7 @@ export function normalizeGroupKey(v, type) {
     return s;
   }
   if (type === 'date') {
-    const d = parseDateSafe(v);
+    const d = parseDateSafe(v, (document.getElementById('dateFormat')?.value || 'auto'));
     return isNaN(d) ? null : new Date(d).toISOString().split('T')[0];
   }
   return v;
@@ -288,8 +288,8 @@ export function groupAgg(rows, groupBy, metric, agg, dateBucket = '', filterConf
           return ak < bk ? -1 : ak > bk ? 1 : 0;
         }
       } else {
-        const dateA = parseDateSafe(ak);
-        const dateB = parseDateSafe(bk);
+        const dateA = parseDateSafe(ak, (document.getElementById('dateFormat')?.value || 'auto'));
+        const dateB = parseDateSafe(bk, (document.getElementById('dateFormat')?.value || 'auto'));
         
         if (!Number.isNaN(dateA) && !Number.isNaN(dateB)) {
           return dateA - dateB;
@@ -1128,17 +1128,33 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
     filteredRows.sort((a, b) => {
       const aVal = a[sortIdx];
       const bVal = b[sortIdx];
-      
-      const aNum = Number(aVal);
-      const bNum = Number(bVal);
-      
+
       let comparison = 0;
-      if (!isNaN(aNum) && !isNaN(bNum)) {
-        comparison = aNum - bNum;
+
+      if (sortIdx === 0) {
+        // Prefer date-aware comparison for the group/key column using selected date format
+        const df = (document.getElementById('dateFormat')?.value || 'auto');
+        const da = parseDateSafe(String(aVal ?? ''), df);
+        const db = parseDateSafe(String(bVal ?? ''), df);
+        if (!Number.isNaN(da) && !Number.isNaN(db)) {
+          comparison = da - db;
+        } else {
+          // Fallback to numeric if both are numbers, else string compare
+          const aNum = Number(aVal);
+          const bNum = Number(bVal);
+          comparison = (!isNaN(aNum) && !isNaN(bNum))
+            ? (aNum - bNum)
+            : String(aVal || '').localeCompare(String(bVal || ''));
+        }
       } else {
-        comparison = String(aVal || '').localeCompare(String(bVal || ''));
+        // Metric column or others: numeric first then lexicographic
+        const aNum = Number(aVal);
+        const bNum = Number(bVal);
+        comparison = (!isNaN(aNum) && !isNaN(bNum))
+          ? (aNum - bNum)
+          : String(aVal || '').localeCompare(String(bVal || ''));
       }
-      
+
       return sortDir === 'asc' ? comparison : -comparison;
     });
     

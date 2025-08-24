@@ -23,6 +23,27 @@ import { showToast } from './ai_chart_toast_system.js';
 import { AITaskManager, createWorkflowManager } from './ai_chart_task_manager.js';
 import { initWorkflowUI, runAiWorkflow, generateExplanation, checkAndGenerateAISummary, renderExplanationCard } from './ai_chart_ui_workflow.js';
 import { buildAggCard, getAiAnalysisPlan, getIntelligentAiAnalysisPlan, renderAggregates, setGenerateButtonState } from './ai_chart_ui_helpers.js';
+// Moved raw data table implementation to separate module
+import {
+  initializeRowInclusion,
+  getIncludedRows,
+  buildRawHeader as buildRawHeaderImpl,
+  renderRawBody as renderRawBodyImpl,
+  renderSortIndicators,
+  renderTFootSums,
+  applyFilter,
+  sortRows,
+  isLikelyNonDataRow,
+  isLikelyCodeColumn,
+  columnType,
+  createOnSearchHandler
+} from './ai_chart_data_table.js';
+
+// Expose select helpers to global window for compatibility
+window.getIncludedRows = getIncludedRows;
+window.isLikelyNonDataRow = isLikelyNonDataRow;
+window.isLikelyCodeColumn = isLikelyCodeColumn;
+window.columnType = columnType;
 /* ========= utils ========= */
 const $ = s => document.querySelector(s);
 const stripBOM = s => (s && s.charCodeAt(0) === 0xFEFF) ? s.slice(1) : s;
@@ -214,6 +235,7 @@ function formatNumberFull(n) {
 }
 function debounce(fn, ms=250){ let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); }; }
 const debouncedRenderAggregates = debounce(() => { renderAggregates(); }, 300);
+window.debouncedRenderAggregates = debouncedRenderAggregates;
 
 // Debounced auto-save function
 const debouncedAutoSave = debounce(() => {
@@ -271,7 +293,22 @@ let MANUAL_JOBS  = [];   // [{groupBy, metric, agg, chart, topN, dateBucket?}]
 let CURRENCY_TOKENS = ['MYR','RM','Malaysian Ringgit','USD','US Dollar','SGD','SG Dollar','EUR','Euro','GBP','British Pound','JPY','Japanese Yen','CNY','Chinese Yuan','AUD','Australian Dollar','CAD','Canadian Dollar','CHF','Swiss Franc','HKD','Hong Kong Dollar','INR','Indian Rupee','KRW','South Korean Won','THB','Thai Baht','VND','Vietnamese Dong','PHP','Philippine Peso','IDR','Indonesian Rupiah'];
 const CURRENCY_COLUMN_HINTS = ['ccy', 'currency', 'cur', 'curr'];
 
-/* ========= persistence ========= */
+// Sync critical state to window for module interop
+window.ROWS = ROWS;
+window.PROFILE = PROFILE;
+window.DATA_COLUMNS = DATA_COLUMNS;
+window.FILTERED_ROWS = FILTERED_ROWS;
+window.PAGE = PAGE;
+window.RPP = RPP;
+window.QUERY = QUERY;
+window.SORT = SORT;
+window.ROW_INCLUDED = ROW_INCLUDED;
+window.ROW_EXCLUSION_REASONS = ROW_EXCLUSION_REASONS;
+window.AUTO_EXCLUDE = AUTO_EXCLUDE;
+window.CURRENCY_TOKENS = CURRENCY_TOKENS;
+window.CURRENCY_COLUMN_HINTS = CURRENCY_COLUMN_HINTS;
+
+ /* ========= persistence ========= */
 function signatureFromHeaders(){
   if (!DATA_COLUMNS.length) return '';
   return DATA_COLUMNS.join('|') + '::' + (ROWS?ROWS.length:0);
@@ -298,6 +335,10 @@ function loadState(){
       $('#mode').value = MODE;
       $('#autoExclude').checked = AUTO_EXCLUDE;
       $('#dateFormat').value = s.dateFormat || 'auto';
+      // Sync to window for data-table module
+      window.MODE = MODE;
+      window.AUTO_EXCLUDE = AUTO_EXCLUDE;
+      window.CURRENCY_TOKENS = CURRENCY_TOKENS;
       switchMode(MODE);
     }
   }catch{}
@@ -305,337 +346,27 @@ function loadState(){
 ['change','click','input'].forEach(ev=>{ document.addEventListener(ev, debounce(saveState, 300), true); });
 
 /* ========= raw data table: header, sorting, filter, pagination, tfoot sums ========= */
-function isLikelyCodeColumn(name){ return /(code|id|sku|account|acct|phone|tel|zip|postal|nr|no|number)$/i.test(String(name).trim()); }
-function columnType(name){ const c = PROFILE?.columns?.find(x=>x.name===name); return c ? c.type : 'string'; }
 
-// Detect rows that are likely subtotals, grand totals, or non-data rows
-function isLikelyNonDataRow(row, index) {
-  if (!row) return { result: true, reason: 'Row is empty' };
+// Bridge to ai_chart_data_table.js implementations via thin wrappers
 
-  const values = Object.values(row).map(v => String(v || '').trim());
-  const lowerValues = values.map(v => v.toLowerCase());
-  const allText = lowerValues.join(' ');
-
-  // Rule 1: Explicit total keywords (enhanced to catch "Grand Total (SGD)")
-  const totalPatterns = [
-    /\b(grand\s+)?(sub)?total\b/i,
-    /\bgrand\s+total\s*\(.+\)/i, // Catches "Grand Total (SGD)"
-    /\bsum\b/i,
-    /\btotal\s*(amount|qty|quantity|value|cost|price)\b/i,
-    /\b(overall|final|net)\s+total\b/i,
-    /^\s*(total|subtotal|sum)\s*:?\s*$/i
-  ];
-  const hasTotal = totalPatterns.some(pattern => pattern.test(allText));
-  if (hasTotal) {
-    const matchedValue = values.find(v => totalPatterns.some(p => p.test(v))) || 'total keyword';
-    return { result: true, reason: `Contains total keyword: "${matchedValue}"` };
-  }
-
-  // Rule 2: Currency-only subtotal rows
-  const currencyPatterns = new RegExp(`^(${CURRENCY_TOKENS.join('|')})$`, 'i');
-  const metricPatterns = /^(price|amount|total|cost|value|sum|subtotal|qty|quantity)$/i;
-
-  let currencyCount = 0;
-  let metricCount = 0;
-  let numberCount = 0;
-  let meaningfulTextCount = 0;
-  let currencyInfo = null;
-
-  values.forEach((val, i) => {
-    const lowerVal = lowerValues[i];
-    if (!lowerVal) return;
-
-    if (currencyPatterns.test(lowerVal)) {
-      currencyCount++;
-      if (!currencyInfo) {
-        const colName = DATA_COLUMNS[i] || '';
-        currencyInfo = {
-          token: val,
-          colIndex: i,
-          colName: colName,
-          isCurrencyHintColumn: CURRENCY_COLUMN_HINTS.some(hint => colName.toLowerCase().includes(hint)),
-          isTrailingColumn: i >= (values.length - 3)
-        };
-      }
-    } else if (metricPatterns.test(lowerVal)) {
-      metricCount++;
-    } else if (isNum(val) && val !== '0') {
-      numberCount++;
-    } else if (val.length > 3) { // A bit more strict on "meaningful"
-      meaningfulTextCount++;
-    }
-  });
-
-  // Condition for currency-only subtotal
-  const isCurrencySubtotal = currencyCount === 1 &&
-                             numberCount >= 1 &&
-                             meaningfulTextCount === 0 &&
-                             currencyInfo && (currencyInfo.isCurrencyHintColumn || currencyInfo.isTrailingColumn);
-
-  if (isCurrencySubtotal) {
-    return { result: true, reason: `Currency subtotal (CCY='${currencyInfo.token}')` };
-  }
-
-  // Keep original checks for separators and mostly empty rows as fallbacks
-  const hasAllCapsTotal = values.some(v => /^[A-Z\s]{3,}(TOTAL|SUM|SUBTOTAL)[A-Z\s]*$/.test(v));
-  const isSeparator = values.some(v => /^[-=_]{3,}$/.test(v));
-
-  if (hasAllCapsTotal) return { result: true, reason: 'Contains ALL CAPS total keywords' };
-  if (isSeparator) return { result: true, reason: 'Appears to be a separator row' };
-  
-  return { result: false, reason: '' };
-}
-
-// Initialize row inclusion array with smart defaults
-function initializeRowInclusion() {
-  if (!ROWS) return;
-  ROW_EXCLUSION_REASONS = {};
-
-  if (!AUTO_EXCLUDE) {
-    ROW_INCLUDED = ROWS.map(() => true);
-    console.log('Auto-exclude disabled. Including all rows.');
-    return;
-  }
-  
-  let excludedCount = 0;
-  ROW_INCLUDED = ROWS.map((row, index) => {
-    const exclusion = isLikelyNonDataRow(row, index);
-    if (exclusion.result) {
-      ROW_EXCLUSION_REASONS[index] = exclusion.reason;
-      excludedCount++;
-    }
-    return !exclusion.result;
-  });
-  
-  const message = `Auto-excluded ${excludedCount} rows.`;
-  console.log(`🔍 ${message}`);
-  showToast(message, 'info');
-}
-
-// Get only the rows that are included for aggregation
-function getIncludedRows() {
-  if (!ROWS || !ROW_INCLUDED || ROW_INCLUDED.length !== ROWS.length) {
-    return Array.isArray(ROWS) ? ROWS : []; // safe fallback: always return an array
-  }
-  
-  const includedRows = ROWS.filter((row, index) => ROW_INCLUDED[index]);
-  console.log(`📊 Using ${includedRows.length} included rows out of ${ROWS.length} total rows for aggregation`);
-  return includedRows;
-}
-window.getIncludedRows = getIncludedRows;
 function buildRawHeader(columns){
-  const thead = $('#dataThead'); thead.innerHTML='';
-  const tr = document.createElement('tr');
-  
-  // Add checkbox column header
-  const checkboxTh = document.createElement('th');
-  checkboxTh.className = 'sticky';
-  checkboxTh.style.width = '60px';
-  checkboxTh.innerHTML = `
-    <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;">
-      <input type="checkbox" id="selectAllRows" title="Select/Deselect All" style="margin: 0;">
-      <small style="font-size: 10px; color: #666;">Include</small>
-    </div>
-  `;
-  
-  // Select all functionality
-  const selectAllCheckbox = checkboxTh.querySelector('#selectAllRows');
-  selectAllCheckbox.addEventListener('change', (e) => {
-    const checked = e.target.checked;
-    ROW_INCLUDED.fill(checked);
-    renderRawBody();
-    // For bulk selection prefer immediate update
-    renderAggregates();
-    debouncedAutoSave();
-    console.log(`${checked ? 'Selected' : 'Deselected'} all ${ROWS.length} rows`);
-  });
-  
-  tr.appendChild(checkboxTh);
-  
-  // Add data column headers
-  columns.forEach(col=>{
-    const th=document.createElement('th'); 
-    th.className='sticky'; 
-    th.dataset.col = col;
-    const titleSpan = document.createElement('span');
-    titleSpan.className = 'col-title';
-    titleSpan.textContent = col;
-    th.appendChild(titleSpan);
-    const s = document.createElement('span'); s.className='sort'; s.textContent='';
-    th.appendChild(s);
-    th.addEventListener('click', ()=>{
-      if (SORT.col===col){ SORT.dir = (SORT.dir==='asc'?'desc':'asc'); }
-      else { SORT.col=col; SORT.dir='asc'; }
-      renderSortIndicators(); renderRawBody();
-    });
-    tr.appendChild(th);
-  });
-  thead.appendChild(tr);
-  renderSortIndicators();
+  // Pass UI callbacks to data-table module
+  return buildRawHeaderImpl(columns, renderAggregates, debouncedAutoSave, renderRawBody, renderSortIndicators);
 }
-function renderSortIndicators(){
-  const ths = Array.from($('#dataThead').querySelectorAll('th'));
-  ths.forEach(th=>{
-    const col = th.dataset?.col || th.querySelector('.col-title')?.textContent?.trim() || th.textContent?.trim() || '';
-    const span = th.querySelector('.sort');
-    if (!span) return;
-    if (SORT.col===col) span.textContent = SORT.dir==='asc' ? '↑' : '↓';
-    else span.textContent = '';
-  });
-}
-function applyFilter(){
-  const q = QUERY.trim().toLowerCase();
-  if (!q){ FILTERED_ROWS = ROWS; return; }
-  FILTERED_ROWS = ROWS.filter(row=>{
-    for (const c of DATA_COLUMNS){
-      const v = row[c];
-      if (v!=null && String(v).toLowerCase().includes(q)) return true;
-    }
-    return false;
-  });
-}
-function sortRows(rows){
-  if (!SORT.col) return rows;
-  const name = SORT.col;
-  const t = columnType(name);
-  const dir = SORT.dir==='asc' ? 1 : -1;
-  const cmp = (a,b)=>{
-    const av = a[name], bv = b[name];
-    if (t==='number'){
-      const an = toNum(av), bn = toNum(bv);
-      if (isNaN(an) && isNaN(bn)) return 0; if (isNaN(an)) return -dir; if (isNaN(bn)) return dir;
-      return an < bn ? -dir : an > bn ? dir : 0;
-    } else if (t==='date'){
-      const an = parseDateSafe(av), bn = parseDateSafe(bv);
-      if (isNaN(an) && isNaN(bn)) return 0; if (isNaN(an)) return -dir; if (isNaN(bn)) return dir;
-      return an < bn ? -dir : an > bn ? dir : 0;
-    } else {
-      const as = (av==null?'':String(av)).toLowerCase();
-      const bs = (bv==null?'':String(bv)).toLowerCase();
-      return as < bs ? -dir : as > bs ? dir : 0;
-    }
-  };
-  return rows.map((r,i)=>({r,i})).sort((A,B)=> cmp(A.r,B.r) || (A.i - B.i)).map(A=>A.r);
-}
-function renderTFootSums(){
-  const tfoot = $('#dataTFoot'); tfoot.innerHTML='';
-  if (!FILTERED_ROWS?.length){ return; }
-  const tr = document.createElement('tr');
-  
-  // Add placeholder for checkbox column
-  const placeholderTd = document.createElement('td');
-  placeholderTd.style.width = '60px'; // Match header checkbox column
-  tr.appendChild(placeholderTd);
 
-  DATA_COLUMNS.forEach(col=>{
-    const td = document.createElement('td');
-    const t = columnType(col);
-    if (t==='number' && !isLikelyCodeColumn(col)){
-      let sum = 0;
-      // Only sum rows that are both filtered AND included
-      for (const r of FILTERED_ROWS){ 
-        const originalIndex = ROWS.findIndex(row => row === r);
-        if (originalIndex !== -1 && ROW_INCLUDED[originalIndex]) {
-          const n = toNum(r[col]); 
-          if (!isNaN(n)) sum += n; 
-        }
-      }
-      td.textContent = 'Σ ' + nice(sum);
-    } else { td.textContent = ''; }
-    tr.appendChild(td);
-  });
-  tfoot.appendChild(tr);
-}
 function renderRawBody(){
-  const tbody = $('#dataTbody'); tbody.innerHTML='';
-  const total = FILTERED_ROWS.length, pages = Math.max(1, Math.ceil(total / RPP));
-  PAGE = Math.min(PAGE, pages);
-  const sorted = sortRows(FILTERED_ROWS);
-  const start = (PAGE-1)*RPP, end = Math.min(start+RPP, total);
-  
-  // Function to highlight search terms in text
-  function highlightText(text, query) {
-    if (!query || !query.trim()) return text;
-    // Escape HTML in the text first to prevent XSS
-    const safeText = String(text).replace(/[&<>"']/g, function(m) {
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
-    });
-    const escapedQuery = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(${escapedQuery})`, 'gi');
-    return safeText.replace(regex, '<mark>$1</mark>');
-  }
-  
-  for (let i=start;i<end;i++){
-    const r = sorted[i];
-    const originalIndex = ROWS.indexOf(r); // Find original index for checkbox state
-    const tr = document.createElement('tr');
-    
-    // Add checkbox column
-    const checkboxTd = document.createElement('td');
-    checkboxTd.style.textAlign = 'center';
-    
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = ROW_INCLUDED[originalIndex] || false;
-    checkbox.style.margin = '0';
-    
-    // Add visual indicator for auto-detected non-data rows
-    const exclusionReason = ROW_EXCLUSION_REASONS[originalIndex];
-    if (exclusionReason) {
-      checkboxTd.style.backgroundColor = '#fff3cd';
-      checkboxTd.title = `Excluded: ${exclusionReason}`;
-      tr.style.backgroundColor = '#fff3cd';
-      tr.style.opacity = '0.7';
-    }
-    
-    checkbox.addEventListener('change', (e) => {
-      ROW_INCLUDED[originalIndex] = e.target.checked;
-      console.log(`Row ${originalIndex + 1} ${e.target.checked ? 'included' : 'excluded'} for aggregation`);
-      
-      // Update select all checkbox state
-      const allChecked = ROW_INCLUDED.every(inc => inc);
-      const noneChecked = ROW_INCLUDED.every(inc => !inc);
-      const selectAllCheckbox = document.getElementById('selectAllRows');
-      if (selectAllCheckbox) {
-        selectAllCheckbox.checked = allChecked;
-        selectAllCheckbox.indeterminate = !allChecked && !noneChecked;
-      }
-      
-      // Update Raw Data table footer sums when inclusion changes
-      renderTFootSums();
-      
-      debouncedRenderAggregates();
-      debouncedAutoSave();
-    });
-    
-    checkboxTd.appendChild(checkbox);
-    tr.appendChild(checkboxTd);
-    
-    // Add data columns
-    DATA_COLUMNS.forEach(c=>{
-      const td = document.createElement('td');
-      let v = r[c];
-      const textValue = (v==null? '' : String(v));
-      
-      // Apply highlighting if there's a search query
-      const searchTerm = QUERY ? QUERY.trim() : '';
-      if (searchTerm) {
-        td.innerHTML = highlightText(textValue, searchTerm);
-      } else {
-        td.textContent = textValue;
-      }
-      
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  }
-  $('#pageInfo').textContent = `Page ${PAGE} / ${pages}`;
-  $('#rowInfo').textContent = `Showing ${total? start+1:0}–${end} of ${total}${(ROWS && ROWS.length!==total) ? ` (filtered from ${ROWS.length})` : ''}`;
-  $('#prevPage').disabled = PAGE<=1;
-  $('#nextPage').disabled = PAGE>=pages;
-  renderTFootSums();
+  // Provide debounced callbacks required by the module
+  return renderRawBodyImpl(window.debouncedRenderAggregates || debouncedRenderAggregates, debouncedAutoSave);
 }
-const onSearch = debounce(()=>{ QUERY = $('#searchInput').value; PAGE=1; applyFilter(); renderRawBody(); }, 200);
+
+/* ========= raw data table: header, sorting, filter, pagination, tfoot sums ========= */
+
+// Bridge to ai_chart_data_table.js implementations via thin wrappers
+
+/* duplicate wrapper removed */
+
+// Debounced search handler using module helper
+const onSearch = createOnSearchHandler(applyFilter, renderRawBody);
 
 /* ========= roles + auto plan (no-AI) ========= */
 // Enhanced Pattern Recognition for Business Data Types
@@ -1065,9 +796,9 @@ $('#loadBtn').onclick = async ()=>{
     // Initialize row inclusion for manual file loading too
     initializeRowInclusion();
     buildRawHeader(DATA_COLUMNS);
-    QUERY = ''; $('#searchInput').value='';
-    SORT = { col:null, dir:'asc' };
-    RPP = Number($('#rowsPerPage').value)||25; PAGE=1;
+    QUERY = ''; window.QUERY = QUERY; $('#searchInput').value='';
+    SORT = { col:null, dir:'asc' }; window.SORT = SORT;
+    RPP = Number($('#rowsPerPage').value)||25; PAGE=1; window.RPP = RPP; window.PAGE = PAGE;
     applyFilter(); renderRawBody();
     MANUAL_ROLES = {}; MANUAL_JOBS = [];
     const smart = getDefaultMode();
@@ -1165,6 +896,7 @@ $('#dateFormat').addEventListener('change', ()=>{
 });
 $('#autoExclude').addEventListener('change', e => {
   AUTO_EXCLUDE = e.target.checked;
+  window.AUTO_EXCLUDE = AUTO_EXCLUDE;
   if (ROWS) {
     initializeRowInclusion();
     renderRawBody();
@@ -1180,9 +912,28 @@ $('#clearManualBtn').onclick = ()=>{ MANUAL_ROLES={}; MANUAL_JOBS=[]; renderAggr
 $('#recalcBtn').onclick = ()=>{ renderAggregates(); showToast('Recalculated with current roles', 'success'); debouncedAutoSave(); };
 
 $('#searchInput').addEventListener('input', onSearch);
-$('#rowsPerPage').addEventListener('change', ()=>{ RPP = Number($('#rowsPerPage').value)||25; PAGE=1; renderRawBody(); });
-$('#prevPage').addEventListener('click', ()=>{ if(PAGE>1){ PAGE--; renderRawBody(); } });
-$('#nextPage').addEventListener('click', ()=>{ const pages=Math.max(1, Math.ceil(FILTERED_ROWS.length / RPP)); if(PAGE<pages){ PAGE++; renderRawBody(); } });
+$('#rowsPerPage').addEventListener('change', ()=>{
+  RPP = Number($('#rowsPerPage').value)||25;
+  PAGE=1;
+  window.RPP = RPP;
+  window.PAGE = PAGE;
+  renderRawBody();
+});
+$('#prevPage').addEventListener('click', ()=>{
+  if(PAGE>1){
+    PAGE--;
+    window.PAGE = PAGE;
+    renderRawBody();
+  }
+});
+$('#nextPage').addEventListener('click', ()=>{
+  const pages=Math.max(1, Math.ceil((window.FILTERED_ROWS?.length || 0) / (window.RPP || RPP)));
+  if(PAGE<pages){
+    PAGE++;
+    window.PAGE = PAGE;
+    renderRawBody();
+  }
+});
 $('#resetExclusion').addEventListener('click', () => {
   if (ROWS) {
     initializeRowInclusion();
@@ -1191,10 +942,11 @@ $('#resetExclusion').addEventListener('click', () => {
   }
 });
 $('#downloadFiltered').addEventListener('click', ()=>{
-  if (!FILTERED_ROWS?.length) return;
+  const filtered = window.FILTERED_ROWS || FILTERED_ROWS || [];
+  if (!filtered.length) return;
   const esc = s => { const str = String(s ?? ''); return /[",\n]/.test(str) ? `"${str.replace(/"/g,'""')}"` : str; };
   const header = DATA_COLUMNS.map(esc).join(',');
-  const sorted = sortRows(FILTERED_ROWS);
+  const sorted = sortRows(filtered);
   const body = sorted.map(r => DATA_COLUMNS.map(c => esc(r[c])).join(',')).join('\n');
   const blob = new Blob([header+'\n'+body], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -1684,6 +1436,7 @@ async function loadHistoryState(id) {
     window.ROWS = ROWS; // Make ROWS accessible to helper modules
     window.currentData = ROWS; // Ensure AI Chat has access to dataset
     DATA_COLUMNS = history.columns || [];
+    window.DATA_COLUMNS = DATA_COLUMNS;
     LAST_PARSE_META = history.meta || {};
     PROFILE = profile(ROWS); window.PROFILE = PROFILE;
     
@@ -1699,14 +1452,24 @@ async function loadHistoryState(id) {
     if (Array.isArray(snapshot.currencyTokens) && snapshot.currencyTokens.length > 0) {
       CURRENCY_TOKENS = snapshot.currencyTokens;
     }
+    // Sync critical state to window for data-table module
+    window.MODE = MODE;
+    window.AUTO_EXCLUDE = AUTO_EXCLUDE;
+    window.QUERY = QUERY;
+    window.SORT = SORT;
+    window.PAGE = PAGE;
+    window.RPP = RPP;
+    window.CURRENCY_TOKENS = CURRENCY_TOKENS;
     if (Array.isArray(snapshot.rowInclusion)) {
        if (snapshot.rowInclusion.length === ROWS.length) {
          ROW_INCLUDED = snapshot.rowInclusion;
+          window.ROW_INCLUDED = ROW_INCLUDED;
        } else {
          console.warn('history rowInclusion length mismatch; adjusting saved inclusion to current rows');
          const arr = snapshot.rowInclusion.slice(0, ROWS.length);
          while (arr.length < ROWS.length) arr.push(true);
          ROW_INCLUDED = arr;
+          window.ROW_INCLUDED = ROW_INCLUDED;
        }
      } else {
       initializeRowInclusion();
@@ -2418,14 +2181,14 @@ window.addEventListener('message', async (event) => {
         buildRawHeader(DATA_COLUMNS);
         
         // Reset search and pagination
-        QUERY = ''; 
+        QUERY = ''; window.QUERY = QUERY;
         $('#searchInput').value = '';
-        SORT = { col: null, dir: 'asc' };
-        RPP = Number($('#rowsPerPage').value) || 25; 
-        PAGE = 1;
+        SORT = { col: null, dir: 'asc' }; window.SORT = SORT;
+        RPP = Number($('#rowsPerPage').value) || 25; window.RPP = RPP;
+        PAGE = 1; window.PAGE = PAGE;
         
         // Apply filter and render the raw data table
-        applyFilter(); 
+        applyFilter();
         renderRawBody();
         console.log('✅ Raw Data table rendered');
         
