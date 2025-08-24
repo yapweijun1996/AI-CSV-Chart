@@ -772,7 +772,7 @@ $('#loadBtn').onclick = async ()=>{
         }
     });
     if(!data.length) throw new Error('No rows detected (check delimiter/header).');
-    ROWS=data; window.ROWS = ROWS; window.currentData = data; DATA_COLUMNS = Object.keys(ROWS[0] || {});
+    ROWS=data; window.ROWS = ROWS; window.currentData = data; DATA_COLUMNS = Object.keys(ROWS[0] || {}); window.DATA_COLUMNS = DATA_COLUMNS;
     const dateFormat = $('#dateFormat').value;
     PROFILE=profile(ROWS, dateFormat); window.PROFILE = PROFILE; renderProfile(PROFILE, LAST_PARSE_META);
 
@@ -2152,7 +2152,7 @@ window.addEventListener('message', async (event) => {
         // Set global variables same as loadBtn onclick
         console.log('🔧 Setting global variables...');
         ROWS = data; window.ROWS = ROWS; window.currentData = data;
-        DATA_COLUMNS = Object.keys(ROWS[0] || {});
+        DATA_COLUMNS = Object.keys(ROWS[0] || {}); window.DATA_COLUMNS = DATA_COLUMNS;
         
         console.log('📊 DATA_COLUMNS:', DATA_COLUMNS);
         
