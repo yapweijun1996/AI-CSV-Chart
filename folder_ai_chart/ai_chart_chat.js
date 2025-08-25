@@ -3,7 +3,7 @@
 // Import dependencies from other modules
 import { fetchWithRetry } from './ai_chart_api.js';
 import { isValidApiKey } from './ai_chart_ai_settings_handlers.js';
-import { getUiSnapshot } from './ai_chart_ui.js';
+import { getUiSnapshot } from './ai_chart_history_manager.js';
 import { getClientContextPrompt } from './ai_chart_context.js';
 
 // Chat state management (make it global for snapshot saving)
