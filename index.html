@@ -5,13 +5,75 @@
 		<meta name="viewport" content="width=device-width,initial-scale=1" />
 		<title>AI Chart</title>
 		
-		<!-- Chart.js v4 -->
-		<script src="./folder_ai_chart/chart.umd.min.js"></script>
-		<!-- PapaParse -->
-		<script src="./folder_ai_chart/papaparse.min.js"></script>
-		<script src="./folder_ai_chart/marked.min.js"></script>
-		
-		<link rel="stylesheet" href="./folder_ai_chart/ai_chart_style.css">
+		<script>
+			(function() {
+				const VERSION_MODE = 'realtime'; // Can be 'realtime', 'daily', or a static string like '1.0.1'
+
+				let version;
+				if (VERSION_MODE === 'realtime') {
+					version = new Date().getTime();
+				} else if (VERSION_MODE === 'daily') {
+					const today = new Date();
+					const yyyy = today.getFullYear();
+					const mm = String(today.getMonth() + 1).padStart(2, '0');
+					const dd = String(today.getDate()).padStart(2, '0');
+					version = `${yyyy}-${mm}-${dd}`;
+				} else {
+					version = VERSION_MODE;
+				}
+				window.VERSION = version;
+
+				const modules = [
+					'./folder_ai_chart/ai_chart_aggregates.js',
+					'./folder_ai_chart/ai_chart_ai_settings_handlers.js',
+					'./folder_ai_chart/ai_chart_api.js',
+					'./folder_ai_chart/ai_chart_chat.js',
+					'./folder_ai_chart/ai_chart_context.js',
+					'./folder_ai_chart/ai_chart_data_table.js',
+					'./folder_ai_chart/ai_chart_engine.js',
+					'./folder_ai_chart/ai_chart_erp_logic.js',
+					'./folder_ai_chart/ai_chart_erp_metrics.js',
+					'./folder_ai_chart/ai_chart_history_manager.js',
+					'./folder_ai_chart/ai_chart_masonry.js',
+					'./folder_ai_chart/ai_chart_parser_worker.js',
+					'./folder_ai_chart/ai_chart_profile.js',
+					'./folder_ai_chart/ai_chart_section_toggle_logic.js',
+					'./folder_ai_chart/ai_chart_store.js',
+					'./folder_ai_chart/ai_chart_task_manager.js',
+					'./folder_ai_chart/ai_chart_toast_system.js',
+					'./folder_ai_chart/ai_chart_ui_helpers.js',
+					'./folder_ai_chart/ai_chart_ui_workflow.js',
+					'./folder_ai_chart/ai_chart_ui.js',
+					'./folder_ai_chart/ai_chart_utils.js'
+				];
+
+				const importMap = {
+					imports: {}
+				};
+				modules.forEach(url => {
+					importMap.imports[url] = `${url}?v=${window.VERSION}`;
+				});
+
+				const im = document.createElement('script');
+				im.type = 'importmap';
+				im.textContent = JSON.stringify(importMap);
+				document.head.appendChild(im);
+
+				const resources = [
+					'./folder_ai_chart/chart.umd.min.js',
+					'./folder_ai_chart/papaparse.min.js',
+					'./folder_ai_chart/marked.min.js',
+					'./folder_ai_chart/ai_chart_style.css'
+				];
+				resources.forEach(url => {
+					if (url.endsWith('.js')) {
+						document.write(`<script src="${url}?v=${window.VERSION}"><\/script>`);
+					} else if (url.endsWith('.css')) {
+						document.write(`<link rel="stylesheet" href="${url}?v=${window.VERSION}">`);
+					}
+				});
+			})();
+		</script>
 	</head>
 	<body>
 		<nav id="sidebar" class="sidebar" aria-label="History sidebar">
@@ -524,8 +586,10 @@
 			<div id="toast-container" class="toast-container"></div>
 			<div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 			
-			<script type="module" src="./folder_ai_chart/ai_chart_chat.js"></script>
-			<script type="module" src="./folder_ai_chart/ai_chart_ui.js"></script>
+			<script type="module">
+				import './folder_ai_chart/ai_chart_chat.js';
+				import './folder_ai_chart/ai_chart_ui.js';
+			</script>
 		</main>
 		<div id="floating-tooltip" aria-hidden="true"></div>
 		<script>

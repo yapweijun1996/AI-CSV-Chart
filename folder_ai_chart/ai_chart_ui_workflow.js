@@ -646,7 +646,11 @@ function injectWorkflowStylesheet() {
         const link = document.createElement('link');
         link.id = 'ai-workflow-enhanced-styles';
         link.rel = 'stylesheet';
-        link.href = new URL('./ai_chart_workflow.css', import.meta.url).href;
+        const cssUrl = new URL('./ai_chart_workflow.css', import.meta.url);
+        if (window.VERSION) {
+          cssUrl.searchParams.set('v', window.VERSION);
+        }
+        link.href = cssUrl.href;
         document.head.appendChild(link);
     }
 }

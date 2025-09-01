@@ -283,7 +283,11 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
     };
 
     try {
-      const worker = new Worker(new URL('./ai_chart_parser_worker.js', import.meta.url));
+      const workerUrl = new URL('./ai_chart_parser_worker.js', import.meta.url);
+      if (window.VERSION) {
+        workerUrl.searchParams.set('v', window.VERSION);
+      }
+      const worker = new Worker(workerUrl);
       isUsingWorker = true;
       const workerTimeout = setTimeout(()=>{
         console.error('Worker timeout - switching to non-worker fallback');
@@ -419,7 +423,11 @@ export async function workerAggregateWithFallback(rows, profile, plan, timeoutMs
 
   let w;
   try {
-    w = new Worker(new URL('./ai_chart_parser_worker.js', import.meta.url));
+    const workerUrl = new URL('./ai_chart_parser_worker.js', import.meta.url);
+    if (window.VERSION) {
+      workerUrl.searchParams.set('v', window.VERSION);
+    }
+    w = new Worker(workerUrl);
     onProgress?.({ stage: 'worker-start', info: 'Aggregation worker started.' });
   } catch (e) {
     console.warn('Worker creation failed:', e);
