@@ -110,6 +110,42 @@ This section explains the project architecture, data flow, and practical impleme
 - Inspect network calls to Gemini in DevTools — watch for rate-limit responses; `fetchWithRetry` handles retries but log responses for debugging.
 - IndexedDB errors: wrap calls with try/catch and enable verbose logging inside [`ai_chart_store.js`](ai_chart_store.js:1).
 
+### Cache Busting & Versioning System
+
+This application implements a comprehensive cache-busting system to prevent browser caching issues during development and deployment. The system supports three versioning modes:
+
+#### Versioning Modes
+- **`'realtime'`**: Appends the current timestamp (e.g., `?v=1693526400000`) to all assets. Forces a reload on every page visit. Ideal for active development.
+- **`'daily'`**: Appends the current date (e.g., `?v=2025-09-01`) to all assets. Forces a reload once per day. Good for production with daily updates.
+- **Static string**: Uses a fixed version number (e.g., `?v=1.0.2`). Manual control for production releases.
+
+#### How to Configure Versioning
+Edit the `VERSION_MODE` constant in [`index.html`](index.html:10):
+```javascript
+const VERSION_MODE = 'daily'; // Change to 'realtime', 'daily', or a static string like '1.0.2'
+```
+
+#### What Gets Versioned
+The system automatically applies versioning to:
+- **ES6 Modules**: All `import` statements are handled via an import map in [`index.html`](index.html:50-55)
+- **Non-module Scripts**: Chart.js, PapaParse, Marked.js via `document.write()` in [`index.html`](index.html:68-74)
+- **Stylesheets**: Main CSS file via `document.write()` in [`index.html`](index.html:68-74)
+- **Web Workers**: Parser worker instantiation in [`ai_chart_engine.js`](ai_chart_engine.js:286-290)
+- **Worker Scripts**: PapaParse loading inside the worker in [`ai_chart_parser_worker.js`](ai_chart_parser_worker.js:9-13)
+- **Dynamic CSS**: Workflow stylesheets in [`ai_chart_ui_workflow.js`](ai_chart_ui_workflow.js:649-652)
+
+#### Technical Implementation
+- **Import Maps**: Modern browser feature that remaps module specifiers to versioned URLs
+- **IIFE Wrapper**: Versioning logic is wrapped in an immediately invoked function expression (IIFE) to avoid global pollution
+- **URL Constructor**: Uses `new URL()` with `import.meta.url` for reliable relative path resolution
+- **SearchParams API**: Appends version parameters using `URLSearchParams`
+
+#### Benefits
+- **Zero Configuration**: Once `VERSION_MODE` is set, all assets are automatically versioned
+- **Centralized Control**: Single constant controls versioning for the entire application
+- **Browser Compatibility**: Uses modern APIs with fallbacks for older browsers
+- **Development Friendly**: Easy switching between development and production modes
+
 ### Testing & Validation
 - Manual tests:
   - Use small and large CSV samples to validate streaming parsing and UI responsiveness.
