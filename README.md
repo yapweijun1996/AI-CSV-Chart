@@ -176,6 +176,7 @@ This project is intentionally modular and approachable. For quick contributions:
 4.  **Choose a Mode**:
     *   **Auto**: The application will automatically analyze your data and generate aggregates and charts.
     *   **Manual**: You can define column roles and create custom aggregates.
+    *   **AI Agent**: Uses advanced AI to intelligently analyze data and create comprehensive analysis plans. Features dynamic task loading, progress tracking with real-time updates, and API call statistics for transparent workflow monitoring.
 5.  **Generate Cards**: Click the "Generate Cards" button to create the aggregates and charts.
 6.  **Interact with the Data**:
     *   View the aggregates and charts in the "Aggregates" section.
@@ -186,7 +187,7 @@ This project is intentionally modular and approachable. For quick contributions:
 7.  (Optional) **AI Outputs**:
     *   When an API key is set, each card can include an AI Explanation.
     *   The page can render a final AI Summary across all aggregates.
-    *   An AI Analysis Chat is available for asking questions grounded in your current charts and data.
+    *   An AI Analysis Chat is available for asking questions grounded in your current charts and data. Features context status indicators, detailed context breakdown (charts count, AI explanations, AI summary, dataset info), and context refresh functionality for up-to-date analysis.
 
 ## Workflow Diagram
 
