@@ -533,10 +533,21 @@ function autoBucket(rows, dateCol){
 
 /* ========= Manual Mode: Role Editor + Add Aggregate ========= */
 function openRoleEditor(){
-  const modal = $('#roleModal'); const tb = $('#roleTBody'); tb.innerHTML='';
-  PROFILE.columns.forEach(c=>{
+  const modal = $('#roleModal');
+  const tb = $('#roleTBody');
+  if (tb) tb.innerHTML='';
+  // Prefer window-scoped state restored by history manager; fall back to module vars
+  const prof = window.PROFILE || PROFILE;
+  const rows = window.ROWS || ROWS;
+
+  if (!prof || !Array.isArray(prof.columns)) {
+    showToast('No dataset loaded or profile unavailable. Load a report before editing column roles.', 'error');
+    return;
+  }
+
+  prof.columns.forEach(c=>{
     const tr=document.createElement('tr');
-    const roleAuto = inferRole(c, PROFILE, ROWS).role;
+    const roleAuto = inferRole(c, prof, rows).role;
     const current = MANUAL_ROLES[c.name] || roleAuto;
     const tdName = document.createElement('td'); tdName.textContent = c.name;
     const tdType = document.createElement('td'); tdType.textContent = c.type;
@@ -544,13 +555,15 @@ function openRoleEditor(){
     const tdRole = document.createElement('td');
     const sel = document.createElement('select'); sel.setAttribute('data-col', c.name);
     ['dimension','metric','date','id','ignore'].forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; sel.appendChild(o); });
-    sel.value = current.replace('metric:strong','metric'); tdRole.appendChild(sel);
+    sel.value = String(current || '').replace('metric:strong','metric'); tdRole.appendChild(sel);
     const tdSample = document.createElement('td'); tdSample.className='muted small'; tdSample.textContent = (c.samples||[]).join(' | ');
     tr.append(tdName, tdType, tdUniq, tdRole, tdSample); tb.appendChild(tr);
   });
-  modal.classList.add('open');
-  modal.setAttribute('aria-hidden','false');
-  modal.focus();
+  if (modal) {
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden','false');
+    modal.focus();
+  }
 }
 $('#closeRoleModal').onclick = ()=>{
   const modal = $('#roleModal');
@@ -600,23 +613,35 @@ function planFromManualRoles(profile){
 function openAddAgg(){
   const modal = $('#aggModal');
   const gb = $('#aggGroupBy'), mt = $('#aggMetric');
-  const bucket = $('#aggBucket'); gb.innerHTML=''; mt.innerHTML=''; bucket.value='';
+  const bucket = $('#aggBucket');
+  if (!gb || !mt || !bucket) {
+    showToast('Aggregate dialog not available.', 'error');
+    return;
+  }
+  gb.innerHTML=''; mt.innerHTML=''; bucket.value='';
+
+  // Prefer window-scoped profile restored by history manager
+  const prof = window.PROFILE || PROFILE;
+  if (!prof || !Array.isArray(prof.columns) || prof.columns.length === 0) {
+    showToast('No dataset loaded or profile unavailable. Load a report before adding an aggregate.', 'error');
+    return;
+  }
 
   // Build candidate lists. In Manual mode prefer MANUAL_ROLES, but fall back to inferred types if empty.
   let dims = [];
   let nums = [];
 
   if (MODE === 'manual') {
-    const dimsByRoles = PROFILE.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='dimension' || (MANUAL_ROLES[c.name]||'')==='date');
-    const numsByRoles = PROFILE.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='metric');
-    const inferredDims = PROFILE.columns.filter(c => ['string','date'].includes(c.type));
-    const inferredNums = PROFILE.columns.filter(c => c.type==='number');
+    const dimsByRoles = prof.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='dimension' || (MANUAL_ROLES[c.name]||'')==='date');
+    const numsByRoles = prof.columns.filter(c => (MANUAL_ROLES[c.name]||'')==='metric');
+    const inferredDims = prof.columns.filter(c => ['string','date'].includes(c.type));
+    const inferredNums = prof.columns.filter(c => c.type==='number');
 
     dims = dimsByRoles.length ? dimsByRoles : inferredDims;
     nums = numsByRoles.length ? numsByRoles : inferredNums;
   } else {
-    dims = PROFILE.columns.filter(c => ['string','date'].includes(c.type));
-    nums = PROFILE.columns.filter(c => c.type==='number');
+    dims = prof.columns.filter(c => ['string','date'].includes(c.type));
+    nums = prof.columns.filter(c => c.type==='number');
   }
 
   // Populate selects
@@ -626,7 +651,7 @@ function openAddAgg(){
   // Enable/disable bucket based on selected groupBy type
   const setBucketAvailability = () => {
     const selectedGb = gb.value;
-    const col = PROFILE.columns.find(c => c.name === selectedGb);
+    const col = prof.columns.find(c => c.name === selectedGb);
     if (col && col.type === 'date') {
       bucket.disabled = false;
     } else {
@@ -637,8 +662,10 @@ function openAddAgg(){
   setBucketAvailability();
   gb.addEventListener('change', setBucketAvailability);
 
-  modal.classList.add('open');
-  modal.setAttribute('aria-hidden','false');
+  if (modal) {
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden','false');
+  }
 }
 $('#closeAggModal').onclick = ()=>{
   const modal = $('#aggModal');
@@ -833,10 +860,20 @@ function switchMode(val){
   window.MODE = MODE;
   console.log('🔁 Mode switched to', window.MODE);
   const manual = MODE==='manual';
-  $('#editRolesBtn').style.display = manual ? '' : 'none';
-  $('#addAggBtn').style.display   = manual ? '' : 'none';
-  $('#clearManualBtn').style.display = manual ? '' : 'none';
-  $('#recalcBtn').style.display = manual ? '' : 'none';
+  const editBtn = $('#editRolesBtn');
+  const addBtn = $('#addAggBtn');
+  const clearBtn = $('#clearManualBtn');
+  const recalcBtn = $('#recalcBtn');
+
+  if (editBtn) editBtn.style.display = manual ? '' : 'none';
+  if (addBtn) addBtn.style.display   = manual ? '' : 'none';
+  if (clearBtn) clearBtn.style.display = manual ? '' : 'none';
+  if (recalcBtn) recalcBtn.style.display = manual ? '' : 'none';
+
+  // Disable manual actions when no profile is available (e.g., after reset or before load)
+  const hasProfile = !!(window.PROFILE && Array.isArray(window.PROFILE.columns) && window.PROFILE.columns.length);
+  if (editBtn) editBtn.disabled = manual && !hasProfile;
+  if (addBtn) addBtn.disabled = manual && !hasProfile;
 }
 $('#mode').addEventListener('change', e=>{ switchMode(e.target.value); renderAggregates(); });
 $('#dateFormat').addEventListener('change', ()=>{
