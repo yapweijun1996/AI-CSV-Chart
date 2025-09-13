@@ -44,6 +44,7 @@
 					'./folder_ai_chart/ai_chart_ui_helpers.js',
 					'./folder_ai_chart/ai_chart_ui_workflow.js',
 					'./folder_ai_chart/ai_chart_ui.js',
+					'./folder_ai_chart/ai_chart_transformers.js',
 					'./folder_ai_chart/ai_chart_utils.js'
 				];
 
@@ -335,6 +336,26 @@
 					</div>
 				</div>
 				
+				<!-- Converted Raw Data (Long) - auto shown only when cross-tab detected -->
+				<div class="section" id="converted-raw-data-section" style="display: none;" data-section-id="converted-raw-data">
+					<div class="section-header">
+						<h3>Converted Raw Data (Long)</h3>
+					</div>
+					<div class="section-content" id="section-content-converted-raw-data">
+						<div class="table-controls">
+							<span class="count" id="convertedRowInfo">Showing 0–0 of 0</span>
+							<button id="downloadConverted">Download converted CSV</button>
+							<button id="adjustMappingBtn">Adjust mapping</button>
+						</div>
+						<div class="data-table-wrap">
+							<table id="convertedDataTable">
+								<thead id="convertedThead"></thead>
+								<tbody id="convertedTbody"></tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+
 				<div class="section" data-section-id="schema-info">
 					<div class="section-header">
 						<h3>Schema / Parser Info</h3>
@@ -457,6 +478,52 @@
 				</div>
 			</div>
 			
+			<!-- Schema Mapping Modal -->
+			<div id="schemaMappingModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+				<div class="modal-card">
+					<div class="modal-head">
+						<h3>Schema Mapping</h3>
+						<button id="closeSchemaMappingModal" aria-label="Close">Close</button>
+					</div>
+					<div class="bar">
+						<label>
+							Label row (1-based):
+							<input id="mappingLabelRowInput" type="number" min="1" value="1" style="width:80px" />
+						</label>
+						<label>
+							Data start row (1-based):
+							<input id="mappingDataStartRowInput" type="number" min="1" value="2" style="width:80px" />
+						</label>
+						<label>
+							Project start column index (1-based):
+							<input id="mappingStartColInput" type="number" min="1" placeholder="(optional)" style="width:120px" />
+						</label>
+					</div>
+					<div class="bar" style="margin-top:8px">
+						<fieldset style="border:1px solid var(--border); padding:8px; border-radius:6px;">
+							<legend>ID Columns</legend>
+							<label><input type="checkbox" id="mappingIdCode" checked /> Code</label>
+							<label style="margin-left:12px;"><input type="checkbox" id="mappingIdDescription" checked /> Description</label>
+						</fieldset>
+					</div>
+					<div class="bar" style="margin-top:8px; gap:12px; align-items:flex-start;">
+						<label style="flex:1">
+							Include columns:
+							<select id="mappingIncludeSelect" multiple size="8" style="width:100%"></select>
+							<span class="muted small" style="display:block;margin-top:4px;">If empty, all non-ID columns will be considered projects, minus excluded ones.</span>
+						</label>
+						<label style="flex:1">
+							Exclude columns:
+							<select id="mappingExcludeSelect" multiple size="8" style="width:100%"></select>
+						</label>
+					</div>
+					<div class="bar" style="margin-top:8px; gap:8px">
+						<button id="mappingPreviewBtn">Preview</button>
+						<button id="mappingApplyBtn" class="primary">Apply</button>
+					</div>
+				</div>
+			</div>
+
 			<!-- History Management Modal -->
 			<div id="historyModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
 				<div class="modal-card">

@@ -825,6 +825,9 @@ export function initWorkflowUI(deps) {
  */
 export async function runAiWorkflow(includedRows, excludedDimensions = []) {
     const apiKey = localStorage.getItem('gemini_api_key');
+    // Prefer the converted (long) profile for planning if available
+    const activeProfile = window.AGG_PROFILE || window.PROFILE;
+
     if (!isValidApiKey(apiKey)) {
         console.log('No valid API key found, skipping AI workflow.');
         // Hide all AI explanation sections if no API key is present
@@ -842,7 +845,7 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
         workflowDeps.WorkflowManager.completeTask('init');
         await new Promise(resolve => setTimeout(resolve, 50));
         
-        const plan = window.autoPlan(window.PROFILE, includedRows, excludedDimensions);
+        const plan = window.autoPlan(activeProfile, includedRows, excludedDimensions);
         workflowDeps.WorkflowManager.completeTask('analysis', 'Using non-AI fallback.');
         workflowDeps.WorkflowManager.completeTask('ai-generation', 'Using automatic plan generation.');
         return plan;
@@ -865,12 +868,12 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
             
             let plan;
             if (window.MODE === 'manual') {
-                plan = (window.MANUAL_JOBS && window.MANUAL_JOBS.length) ? { jobs: window.MANUAL_JOBS.slice(0, 10) } : window.planFromManualRoles(window.PROFILE);
+                plan = (window.MANUAL_JOBS && window.MANUAL_JOBS.length) ? { jobs: window.MANUAL_JOBS.slice(0, 10) } : window.planFromManualRoles(activeProfile);
                 workflowDeps.WorkflowManager.completeTask('analysis', 'Using manual roles.');
                 workflowDeps.WorkflowManager.completeTask('config');
             } else if (window.MODE === 'ai_agent') {
                 const context = {
-                    profile: window.PROFILE,
+                    profile: activeProfile,
                     includedRows: includedRows ? includedRows.slice(0, 5) : [], // Sample rows
                     excludedDimensions,
                     maxCharts: 10
@@ -950,7 +953,7 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
                 // Don't complete analysis task yet - wait until after cards are built
             } else {
                 const context = {
-                    profile: window.PROFILE,
+                    profile: activeProfile,
                     includedRows: includedRows ? includedRows.slice(0, 5) : [], // Sample rows
                     excludedDimensions,
                     maxCharts: 10
@@ -1027,8 +1030,8 @@ export async function generateExplanation(agg, job, parentCard) {
         const context = {
             agg,
             job,
-            profile: window.PROFILE,
-            rows: window.ROWS ? window.ROWS.slice(0, 5) : []
+            profile: (window.AGG_PROFILE || window.PROFILE),
+            rows: (window.AGG_ROWS && window.AGG_ROWS.length ? window.AGG_ROWS.slice(0, 5) : (window.ROWS ? window.ROWS.slice(0, 5) : []))
         };
  
         const prompt = `

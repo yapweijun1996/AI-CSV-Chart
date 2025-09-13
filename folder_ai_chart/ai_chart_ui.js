@@ -24,6 +24,7 @@ import { initializeChat, refreshChatUI } from './ai_chart_chat.js';
 import { AITaskManager, createWorkflowManager } from './ai_chart_task_manager.js';
 import { initWorkflowUI, runAiWorkflow, generateExplanation, checkAndGenerateAISummary, renderExplanationCard } from './ai_chart_ui_workflow.js';
 import { buildAggCard, getAiAnalysisPlan, getIntelligentAiAnalysisPlan, renderAggregates, setGenerateButtonState } from './ai_chart_ui_helpers.js';
+import { detectCrossTab, convertCrossTabToLong } from './ai_chart_transformers.js';
 // Moved raw data table implementation to separate module
 import {
   initializeRowInclusion,
@@ -227,6 +228,253 @@ function formatNumberFull(n) {
   if (!Number.isFinite(num)) return '0.00';
   return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+// ----- Converted Raw Data (Long) Preview Helpers -----
+function toCSVString(rows, columns){
+  const esc = s => {
+    const str = String(s ?? '');
+    return /[",\n]/.test(str) ? `"${str.replace(/"/g,'""')}"` : str;
+  };
+  const header = columns.map(esc).join(',');
+  const body = rows.map(r => columns.map(c => esc(r[c])).join(',')).join('\n');
+  return header + '\n' + body;
+}
+
+function renderConvertedPreview(columns, rows, limit = 100){
+  const thead = document.getElementById('convertedThead');
+  const tbody = document.getElementById('convertedTbody');
+  const rowInfo = document.getElementById('convertedRowInfo');
+  if (!thead || !tbody) return;
+
+  thead.innerHTML = '';
+  const trh = document.createElement('tr');
+  for (const c of columns){
+    const th = document.createElement('th');
+    th.className = 'sticky';
+    th.textContent = c;
+    trh.appendChild(th);
+  }
+  thead.appendChild(trh);
+
+  tbody.innerHTML = '';
+  const n = Math.min(limit, rows.length);
+  for (let i=0;i<n;i++){
+    const r = rows[i];
+    const tr = document.createElement('tr');
+    for (const c of columns){
+      const td = document.createElement('td');
+      td.textContent = String(r[c] ?? '');
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+
+  if (rowInfo){
+    rowInfo.textContent = `Showing 1–${n} of ${rows.length} (converted long rows)`;
+  }
+
+  const dlBtn = document.getElementById('downloadConverted');
+  if (dlBtn){
+    dlBtn.onclick = () => {
+      const csv = toCSVString(rows, columns);
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'converted_long.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+  }
+}
+
+function showConvertedSection(columns, rows){
+  const sec = document.getElementById('converted-raw-data-section');
+  if (!sec) return;
+  sec.style.display = '';
+  renderConvertedPreview(columns, rows, 100);
+}
+
+function hideConvertedSection(){
+  const sec = document.getElementById('converted-raw-data-section');
+  if (sec) sec.style.display = 'none';
+}
+
+// ===== Schema Mapping UI (Cross-tab) =====
+function getSelectedOptionsFromSelect(sel) {
+  const arr = [];
+  if (!sel) return arr;
+  for (const opt of Array.from(sel.options)) {
+    if (opt.selected) arr.push(opt.value);
+  }
+  return arr;
+}
+
+function openSchemaMappingModal(){
+  const modal = document.getElementById('schemaMappingModal');
+  if (!modal) return showToast('Schema Mapping UI not available.', 'error');
+  if (!window.ROWS || !window.CROSSTAB_DETECTION || !window.CROSSTAB_DETECTION.isCrossTab) {
+    showToast('Schema Mapping is only available for detected cross-tab reports.', 'warning');
+    return;
+  }
+  populateSchemaMappingUI();
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden','false');
+  try { modal.focus(); } catch {}
+}
+
+function closeSchemaMappingModal(){
+  const modal = document.getElementById('schemaMappingModal');
+  if (modal) { modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); }
+}
+
+function populateSchemaMappingUI(){
+  const labelInput = document.getElementById('mappingLabelRowInput');
+  const dataStartInput = document.getElementById('mappingDataStartRowInput');
+  const startColInput = document.getElementById('mappingStartColInput');
+  const idCode = document.getElementById('mappingIdCode');
+  const idDesc = document.getElementById('mappingIdDescription');
+  const includeSel = document.getElementById('mappingIncludeSelect');
+  const excludeSel = document.getElementById('mappingExcludeSelect');
+
+  if (!window.ROWS || !window.ROWS.length) return;
+  const keys = Object.keys(window.ROWS[0] || {});
+  const detection = window.CROSSTAB_DETECTION || {};
+  const opt = window.CROSSTAB_OPTIONS || {
+    idCols: ['Code','Description'],
+    labelRowIndex: detection.headerRows === 2 ? 0 : 0,
+    dataStartRow: detection.headerRows === 2 ? 1 : 1,
+    includeCols: Array.isArray(detection.projectCols) ? detection.projectCols : null,
+    excludeCols: []
+  };
+
+  // Set numeric inputs (1-based)
+  if (labelInput) labelInput.value = String((opt.labelRowIndex ?? 0) + 1);
+  if (dataStartInput) dataStartInput.value = String((opt.dataStartRow ?? 1) + 1);
+
+  // Compute suggested start column from includeCols or detection.projectCols
+  const indicesFrom = (cols) => (Array.isArray(cols) ? cols : []).map(c => keys.indexOf(c)).filter(i => i >= 0);
+  let minIdx = -1;
+  const incIdxs = indicesFrom(opt.includeCols?.length ? opt.includeCols : detection.projectCols);
+  if (incIdxs.length) minIdx = Math.min(...incIdxs);
+  if (startColInput) startColInput.value = minIdx >= 0 ? String(minIdx + 1) : '';
+
+  // ID checkboxes
+  const idCols = new Set(opt.idCols || ['Code','Description']);
+  if (idCode) idCode.checked = idCols.has('Code');
+  if (idDesc) idDesc.checked = idCols.has('Description');
+
+  // Build include/exclude option lists using non-ID columns
+  if (includeSel) includeSel.innerHTML = '';
+  if (excludeSel) excludeSel.innerHTML = '';
+  const nonIdCols = keys.filter(k => !idCols.has(k));
+
+  nonIdCols.forEach(name => {
+    const o1 = document.createElement('option'); o1.value = name; o1.textContent = name;
+    const o2 = document.createElement('option'); o2.value = name; o2.textContent = name;
+    includeSel?.appendChild(o1);
+    excludeSel?.appendChild(o2);
+  });
+
+  // Preselect include based on current options or detection
+  const preInclude = Array.isArray(opt.includeCols) && opt.includeCols.length ? opt.includeCols
+                    : (Array.isArray(detection.projectCols) ? detection.projectCols : []);
+  if (includeSel && preInclude && preInclude.length) {
+    const set = new Set(preInclude);
+    Array.from(includeSel.options).forEach(o => { if (set.has(o.value)) o.selected = true; });
+  }
+
+  // Preselect exclude based on options
+  const preExclude = Array.isArray(opt.excludeCols) ? opt.excludeCols : [];
+  if (excludeSel && preExclude.length) {
+    const set = new Set(preExclude);
+    Array.from(excludeSel.options).forEach(o => { if (set.has(o.value)) o.selected = true; });
+  }
+}
+
+function computeOptionsFromMappingUI(){
+  const labelInput = document.getElementById('mappingLabelRowInput');
+  const dataStartInput = document.getElementById('mappingDataStartRowInput');
+  const startColInput = document.getElementById('mappingStartColInput');
+  const idCode = document.getElementById('mappingIdCode');
+  const idDesc = document.getElementById('mappingIdDescription');
+  const includeSel = document.getElementById('mappingIncludeSelect');
+  const excludeSel = document.getElementById('mappingExcludeSelect');
+
+  const idCols = [];
+  if (idCode?.checked) idCols.push('Code');
+  if (idDesc?.checked) idCols.push('Description');
+
+  const labelRowIndex = Math.max(0, (parseInt(labelInput?.value || '1', 10) || 1) - 1);
+  const dataStartRow = Math.max(0, (parseInt(dataStartInput?.value || '2', 10) || 2) - 1);
+
+  const keys = Object.keys((window.ROWS && window.ROWS[0]) || {});
+  const startIdxInput = parseInt(startColInput?.value || '', 10);
+  let includeCols = getSelectedOptionsFromSelect(includeSel);
+  const excludeCols = getSelectedOptionsFromSelect(excludeSel);
+
+  // If start column is given, derive includeCols from that position onward (excluding ID cols)
+  if (Number.isInteger(startIdxInput) && startIdxInput >= 1) {
+    const startIdx0 = Math.min(Math.max(0, startIdxInput - 1), keys.length - 1);
+    const idSet = new Set(idCols);
+    includeCols = keys.slice(startIdx0).filter(k => !idSet.has(k));
+  }
+
+  const options = {
+    idCols,
+    labelRowIndex,
+    dataStartRow,
+    includeCols: includeCols && includeCols.length ? includeCols : null,
+    excludeCols: (!includeCols || includeCols.length === 0) ? excludeCols : []
+  };
+  return options;
+}
+
+function previewSchemaMapping(){
+  if (!window.ROWS) return showToast('Load a CSV first.', 'error');
+  const detection = window.CROSSTAB_DETECTION || detectCrossTab(window.ROWS);
+  const options = computeOptionsFromMappingUI();
+  try {
+    const { rows: longRows, columns } = convertCrossTabToLong(window.ROWS, detection, options);
+    renderConvertedPreview(columns, longRows, 100);
+    showToast('Preview updated.', 'success');
+  } catch (e) {
+    console.warn('Mapping preview failed:', e);
+    showToast('Preview failed: ' + (e?.message || e), 'error');
+  }
+}
+
+function applySchemaMapping(){
+  if (!window.ROWS) return showToast('Load a CSV first.', 'error');
+  const detection = window.CROSSTAB_DETECTION || detectCrossTab(window.ROWS);
+  const options = computeOptionsFromMappingUI();
+  try {
+    const { rows: longRows, columns } = convertCrossTabToLong(window.ROWS, detection, options);
+    window.CROSSTAB_OPTIONS = options;
+    window.AGG_ROWS = longRows;
+    const dateFormatConv = document.getElementById('dateFormat')?.value || 'auto';
+    window.AGG_PROFILE = profile(longRows, dateFormatConv);
+    showConvertedSection(columns, longRows);
+    closeSchemaMappingModal();
+    renderAggregates();
+    showToast('Mapping applied.', 'success');
+  } catch (e) {
+    console.warn('Apply mapping failed:', e);
+    showToast('Apply failed: ' + (e?.message || e), 'error');
+  }
+}
+
+// Bind mapping UI handlers
+(function bindSchemaMappingHandlers(){
+  const adjustBtn = document.getElementById('adjustMappingBtn');
+  const closeBtn = document.getElementById('closeSchemaMappingModal');
+  const previewBtn = document.getElementById('mappingPreviewBtn');
+  const applyBtn = document.getElementById('mappingApplyBtn');
+  if (adjustBtn) adjustBtn.onclick = openSchemaMappingModal;
+  if (closeBtn) closeBtn.onclick = closeSchemaMappingModal;
+  if (previewBtn) previewBtn.onclick = previewSchemaMapping;
+  if (applyBtn) applyBtn.onclick = applySchemaMapping;
+})();
+
 function debounce(fn, ms=250){ let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); }; }
 const debouncedRenderAggregates = debounce(() => { renderAggregates(); }, 300);
 window.debouncedRenderAggregates = debouncedRenderAggregates;
@@ -769,6 +1017,40 @@ $('#loadBtn').onclick = async ()=>{
         }
       }
     }
+    // Detect cross-tab and convert to long for aggregation
+    try {
+      const detection = detectCrossTab(ROWS);
+      window.CROSSTAB_DETECTION = detection;
+      if (detection && detection.isCrossTab) {
+        const defaultOptions = {
+          idCols: ['Code','Description'],
+          labelRowIndex: detection.headerRows === 2 ? 0 : 0,
+          dataStartRow: detection.headerRows === 2 ? 1 : 1,
+          includeCols: Array.isArray(detection.projectCols) && detection.projectCols.length ? detection.projectCols : null,
+          excludeCols: []
+        };
+        window.CROSSTAB_OPTIONS = defaultOptions;
+
+        const { rows: longRows, columns } = convertCrossTabToLong(ROWS, detection, defaultOptions);
+        window.AGG_ROWS = longRows;
+        const dateFormatConv = $('#dateFormat').value;
+        window.AGG_PROFILE = profile(longRows, dateFormatConv);
+        showConvertedSection(columns, longRows);
+        showToast('Detected cross-tab format. Using converted long format for aggregation.', 'info');
+      } else {
+        window.AGG_ROWS = null;
+        window.AGG_PROFILE = null;
+        window.CROSSTAB_OPTIONS = null;
+        hideConvertedSection();
+      }
+    } catch (e) {
+      console.warn('Cross-tab detect/convert failed:', e);
+      window.AGG_ROWS = null;
+      window.AGG_PROFILE = null;
+      window.CROSSTAB_OPTIONS = null;
+      hideConvertedSection();
+    }
+
     $('#meta').textContent=`Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns. (delimiter="${meta.delimiter}")`;
     const resultsEl = $('#results');
     if (resultsEl) {
@@ -1286,6 +1568,41 @@ window.addEventListener('message', async (event) => {
         // Apply filter and render the raw data table
         applyFilter();
         renderRawBody();
+
+        // Detect cross-tab and convert to long for aggregation (table_csv path)
+        try {
+          const detection = detectCrossTab(ROWS);
+          window.CROSSTAB_DETECTION = detection;
+          if (detection && detection.isCrossTab) {
+            const defaultOptions = {
+              idCols: ['Code','Description'],
+              labelRowIndex: detection.headerRows === 2 ? 0 : 0,
+              dataStartRow: detection.headerRows === 2 ? 1 : 1,
+              includeCols: Array.isArray(detection.projectCols) && detection.projectCols.length ? detection.projectCols : null,
+              excludeCols: []
+            };
+            window.CROSSTAB_OPTIONS = defaultOptions;
+
+            const { rows: longRows, columns } = convertCrossTabToLong(ROWS, detection, defaultOptions);
+            window.AGG_ROWS = longRows;
+            const dateFormatConv = $('#dateFormat').value || 'auto';
+            window.AGG_PROFILE = profile(longRows, dateFormatConv);
+            showConvertedSection(columns, longRows);
+            showToast('Detected cross-tab format (table stream). Using converted long format for aggregation.', 'info');
+          } else {
+            window.AGG_ROWS = null;
+            window.AGG_PROFILE = null;
+            window.CROSSTAB_OPTIONS = null;
+            hideConvertedSection();
+          }
+        } catch (e) {
+          console.warn('Cross-tab detect/convert failed (table stream):', e);
+          window.AGG_ROWS = null;
+          window.AGG_PROFILE = null;
+          window.CROSSTAB_OPTIONS = null;
+          hideConvertedSection();
+        }
+
         console.log('✅ Raw Data table rendered');
         
         // Reset manual overrides (same as loadBtn)

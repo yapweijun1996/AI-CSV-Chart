@@ -200,6 +200,13 @@ export function groupAgg(rows, groupBy, metric, agg, dateBucket = '', filterConf
     const finalKey = key === null ? '(Missing)' : key;
     if (agg === 'count') {
       m.set(finalKey, (m.get(finalKey) || 0) + 1);
+    } else if (agg === 'distinct_count') {
+      const raw = r[metric];
+      const present = raw !== null && raw !== undefined && String(raw).trim() !== '';
+      if (present) {
+        if (!m.has(finalKey)) m.set(finalKey, new Set());
+        m.get(finalKey).add(String(raw));
+      }
     } else {
       const v = toNum(r[metric]);
       if (isFinite(v)) {
@@ -214,16 +221,26 @@ export function groupAgg(rows, groupBy, metric, agg, dateBucket = '', filterConf
     let val = 0;
     if (agg === 'count') {
       if (Array.isArray(arr)) {
-        val = arr.reduce((a, b) => a + b, 0);
+        val = arr.length; // count of items
       } else {
-        val = arr;
+        val = Number(arr) || 0; // numeric counter path
       }
-    } else if (!arr.length) continue;
-    else if (agg === 'sum') val = arr.reduce((a, b) => a + b, 0);
-    else if (agg === 'avg') val = arr.reduce((a, b) => a + b, 0) / arr.length;
-    else if (agg === 'min') val = Math.min(...arr);
-    else if (agg === 'max') val = Math.max(...arr);
-    else if (agg === 'distinct_count') val = new Set(arr).size;
+    } else if (agg === 'distinct_count') {
+      if (arr instanceof Set) {
+        val = arr.size;
+      } else if (Array.isArray(arr)) {
+        val = new Set(arr).size;
+      } else {
+        val = 0;
+      }
+    } else {
+      const list = Array.isArray(arr) ? arr : [];
+      if (!list.length) continue;
+      if (agg === 'sum') val = list.reduce((a, b) => a + b, 0);
+      else if (agg === 'avg') val = list.reduce((a, b) => a + b, 0) / list.length;
+      else if (agg === 'min') val = Math.min(...list);
+      else if (agg === 'max') val = Math.max(...list);
+    }
     out.push([k, val]);
   }
   
@@ -359,6 +376,127 @@ export function groupAgg(rows, groupBy, metric, agg, dateBucket = '', filterConf
     rawRowsCount,
     groupsBeforeFilter: out.length,
     removedRows
+  };
+}
+
+/**
+ * Pivot aggregation: produces matrix rowsDim × colsDim with aggregated metric values
+ * options: { topCols?: number, topRows?: number }
+ */
+export function pivotAgg(rows, rowsDim, colsDim, metric, agg = 'sum', options = {}) {
+  const topCols = Math.max(1, Number(options.topCols ?? 8));
+  const topRows = Math.max(1, Number(options.topRows ?? 20));
+
+  const rowTotals = new Map();   // rowKey -> total
+  const colTotals = new Map();   // colKey -> total
+  const cell = new Map();        // `${rowKey}||${colKey}` -> number
+
+  const addCell = (rKey, cKey, v) => {
+    const key = `${rKey}||${cKey}`;
+    const prev = cell.get(key) || 0;
+    cell.set(key, prev + v);
+  };
+
+  for (const r of rows || []) {
+    const rKeyRaw = r?.[rowsDim];
+    const cKeyRaw = r?.[colsDim];
+    const rKey = (rKeyRaw === null || rKeyRaw === undefined || String(rKeyRaw).trim() === '') ? '(Missing)' : String(rKeyRaw).trim();
+    const cKey = (cKeyRaw === null || cKeyRaw === undefined || String(cKeyRaw).trim() === '') ? '(Missing)' : String(cKeyRaw).trim();
+
+    let v = toNum(r?.[metric]);
+    if (!Number.isFinite(v)) continue;
+
+    // Only sum supported initially for pivot (consistent with common use)
+    addCell(rKey, cKey, v);
+    rowTotals.set(rKey, (rowTotals.get(rKey) || 0) + v);
+    colTotals.set(cKey, (colTotals.get(cKey) || 0) + v);
+  }
+
+  // Determine top columns by total
+  const allCols = Array.from(colTotals.entries()).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+  const cols = allCols.slice(0, topCols);
+
+  // Determine top rows by total (based on trimmed columns to minimize sparse visuals)
+  const allRows = Array.from(rowTotals.entries()).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+  const rowsTrimmed = allRows.slice(0, topRows);
+
+  const rowsOut = [];
+  let grandTotal = 0;
+  for (const rKey of rowsTrimmed) {
+    const values = [];
+    let rSum = 0;
+    for (const cKey of cols) {
+      const key = `${rKey}||${cKey}`;
+      const v = cell.get(key) || 0;
+      values.push(v);
+      rSum += v;
+    }
+    rowsOut.push({ key: rKey, values, total: rSum });
+    grandTotal += rSum;
+  }
+
+  // Compute column totals for visible matrix
+  const colTotalsVisible = cols.map(cKey => {
+    let s = 0;
+    for (const r of rowsOut) {
+      const idx = cols.indexOf(cKey);
+      if (idx >= 0) s += Number(r.values[idx] || 0);
+    }
+    return s;
+  });
+
+  return {
+    rowDim: rowsDim,
+    colDim: colsDim,
+    cols,
+    rows: rowsOut,
+    header: [rowsDim, ...cols],
+    rowTotals: Object.fromEntries(rowsOut.map(r => [r.key, r.total])),
+    colTotals: Object.fromEntries(cols.map((c,i)=>[c, colTotalsVisible[i]])),
+    grandTotal
+  };
+}
+
+/**
+ * Build Chart.js stacked bar/hbar config for pivot result
+ * @param {Object} pvt - result from pivotAgg
+ * @param {'vertical'|'horizontal'} orientation
+ * @returns Chart.js config
+ */
+export function computePivotChartConfig(pvt, orientation = 'horizontal') {
+  const labels = pvt.rows.map(r => r.key);
+  const datasets = pvt.cols.map((col, ci) => ({
+    label: col,
+    data: pvt.rows.map(r => Number(r.values[ci] || 0)),
+    backgroundColor: `hsl(${(ci*37)%360} 70% 60% / 0.8)`,
+    borderColor: `hsl(${(ci*37)%360} 70% 40% / 1)`,
+    borderWidth: 1,
+    barPercentage: 0.9,
+    categoryPercentage: 0.9
+  }));
+
+  const indexAxis = (orientation === 'horizontal') ? 'y' : 'x';
+
+  return {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis,
+      plugins: {
+        legend: { display: pvt.cols.length <= 20 },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${nice(ctx.parsed[indexAxis === 'y' ? 'x' : 'y'])}`
+          }
+        }
+      },
+      scales: {
+        x: { stacked: true, ticks: { callback: v => nice(v) } },
+        y: { stacked: true }
+      }
+    }
   };
 }
 
@@ -1306,20 +1444,42 @@ export function addMissingDataWarning(card, aggResult, totalRows, showMissing) {
 
 /**
  * Generate canonical key for job deduplication
- * @param {Object} job - Job object with groupBy, metric, agg, dateBucket
+ * @param {Object} job - Job object with groupBy, metric, agg, dateBucket, where?
  * @returns {string} Canonical key
  */
 export function canonicalJobKey(job) {
-  const { groupBy, metric, agg, dateBucket } = job;
+  const { type, groupBy, metric, agg, dateBucket, where, rowsDim, colsDim } = job || {};
   
   const normalizeString = (str) => {
-    if (!str || str === null || str === undefined) return '';
+    if (str === null || str === undefined) return '';
     return String(str).trim().toLowerCase();
   };
-  
+
   const normalizedMetric = !metric || metric === '' ? 'count' : normalizeString(metric);
-  
-  return `${normalizeString(agg)}|${normalizedMetric}|${normalizeString(groupBy)}|${normalizeString(dateBucket)}`;
+
+  // Include 'where' filter in the canonical key so filtered jobs are not deduplicated away
+  const normalizeWhere = (w) => {
+    if (!w || typeof w !== 'object') return '';
+    try {
+      const entries = Object.entries(w).map(([k, v]) => {
+        if (Array.isArray(v)) {
+          const vs = v.map(x => normalizeString(x)).sort(); // stable order
+          return `${normalizeString(k)}=[${vs.join(',')}]`;
+        }
+        return `${normalizeString(k)}=${normalizeString(v)}`;
+      }).sort(); // stable key order
+      return entries.join('&');
+    } catch {
+      return '';
+    }
+  };
+
+  const wherePart = normalizeWhere(where);
+  const typePart = normalizeString(type);
+  const pivotPart = (typePart === 'pivot')
+    ? `|${normalizeString(rowsDim)}|${normalizeString(colsDim)}`
+    : '';
+  return `${typePart}|${normalizeString(agg)}|${normalizedMetric}|${normalizeString(groupBy)}|${normalizeString(dateBucket)}${pivotPart}|${wherePart}`;
 }
 
 /**

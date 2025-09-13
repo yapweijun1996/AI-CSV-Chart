@@ -1,7 +1,7 @@
 import * as Store from './ai_chart_store.js';
 import { fetchWithRetry } from './ai_chart_api.js';
 import { isValidApiKey } from './ai_chart_ai_settings_handlers.js';
-import { groupAgg, renderChartCard, renderAggTable, addMissingDataWarning, computeChartConfig, canonicalJobKey, deduplicateJobs, ensureChart } from './ai_chart_aggregates.js';
+import { groupAgg, renderChartCard, renderAggTable, addMissingDataWarning, computeChartConfig, canonicalJobKey, deduplicateJobs, ensureChart, pivotAgg, computePivotChartConfig } from './ai_chart_aggregates.js';
 import { showToast } from './ai_chart_toast_system.js';
 import { GeminiAPI, workflowTimer } from './ai_chart_engine.js';
 import { getErpAnalysisPriority } from './ai_chart_erp_logic.js';
@@ -15,13 +15,105 @@ import { renderExplanationCard, generateExplanation, runAiWorkflow, checkAndGene
 const $ = s => document.querySelector(s);
 const formatNumberFull = window.formatNumberFull || ((n) => n.toLocaleString());
 const getIncludedRows = () => window.getIncludedRows ? window.getIncludedRows() : [];
+// When cross-tab is detected, aggregate against converted long rows (AGG_ROWS) if available.
+const aggregationRows = () =>
+  (window.AGG_ROWS && Array.isArray(window.AGG_ROWS))
+    ? window.AGG_ROWS
+    : (window.getIncludedRows ? window.getIncludedRows() : []);
 const ROWS = () => window.ROWS;
-const PROFILE = () => window.PROFILE;
+// Prefer aggregation profile when present (for converted long format), fallback to original profile
+const PROFILE = () => window.AGG_PROFILE || window.PROFILE;
 const MODE = () => window.MODE;
 const autoPlan = (profile, rows, excluded) => window.autoPlan ? window.autoPlan(profile, rows, excluded) : { jobs: [] };
 const marked = window.marked || { parse: (text) => text };
 const debounce = window.debounce || ((fn, delay) => fn);
 const debouncedAutoSave = window.debouncedAutoSave || (() => {});
+
+// ===== Helper: where filtering and labeling =====
+function filterRowsByWhere(rows, where) {
+  if (!where || typeof where !== 'object') return rows;
+  const entries = Object.entries(where);
+  if (entries.length === 0) return rows;
+  return rows.filter(r => {
+    for (const [k, v] of entries) {
+      const rv = r[k];
+      if (Array.isArray(v)) {
+        const set = new Set(v.map(x => String(x ?? '').trim()));
+        if (!set.has(String(rv ?? '').trim())) return false;
+      } else {
+        if (String(rv ?? '').trim() !== String(v ?? '').trim()) return false;
+      }
+    }
+    return true;
+  });
+}
+
+function formatWhereLabel(where) {
+  if (!where || typeof where !== 'object') return '';
+  try {
+    const parts = Object.entries(where).map(([k, v]) => {
+      if (Array.isArray(v)) return `${k} in [${v.join(', ')}]`;
+      return `${k}=${v}`;
+    });
+    return parts.join(' & ');
+  } catch {
+    return '';
+  }
+}
+
+/**
+* Sanitize raw rows for aggregation:
+* - Drop footer/summary rows like "Grand Total" etc.
+*/
+function sanitizeRows(rows) {
+ try {
+   if (!Array.isArray(rows)) return [];
+   const isFooterLike = (r) => {
+     for (const k in r) {
+       const v = r[k];
+       if (typeof v === 'string') {
+         const s = v.trim().toLowerCase();
+         if (s.startsWith('grand total') || s === 'grand total') return true;
+       }
+     }
+     return false;
+   };
+   return rows.filter(r => !isFooterLike(r));
+ } catch (e) {
+   console.warn('sanitizeRows failed:', e);
+   return Array.isArray(rows) ? rows : [];
+ }
+}
+
+/**
+* Prefer financial metric names for non-long schema datasets.
+* Order of preference (case-insensitive):
+*   amount local, amount, total amount, total, value, sales, revenue, price, unit price, qty, quantity
+*/
+function preferFinancialMetric(columnNames = []) {
+ const names = (columnNames || []).map(n => String(n || ''));
+ const lc = names.map(n => n.toLowerCase());
+ const prefer = (...candidates) => {
+   for (const c of candidates) {
+     const idx = lc.indexOf(c.toLowerCase());
+     if (idx >= 0) return names[idx];
+   }
+   return null;
+ };
+ return (
+   prefer('amount local') ||
+   prefer('amount') ||
+   prefer('total amount') ||
+   prefer('total') ||
+   prefer('value') ||
+   prefer('sales') ||
+   prefer('revenue') ||
+   prefer('price') ||
+   prefer('unit price') ||
+   prefer('qty') ||
+   prefer('quantity')
+ );
+}
 
 // Use window-scoped render flags to avoid duplication with main UI
 
@@ -77,9 +169,25 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     card.dataset.dateBucket = job.dateBucket || '';
     card.dataset.showMissing = String(showMissing);
     card.dataset.canonicalKey = canonicalKey;
+    if (job.where) {
+      try { card.dataset.where = JSON.stringify(job.where); } catch {}
+    }
+    if (job.type === 'pivot') {
+      card.dataset.pivot = 'true';
+      if (job.rowsDim) card.dataset.rowsDim = job.rowsDim;
+      if (job.colsDim) card.dataset.colsDim = job.colsDim;
+    }
     if (sessionId) card.dataset.sessionId = sessionId;
 
-    const title = `${job.agg}(${job.metric || ''}) by ${job.groupBy}`;
+    const whereTitle = formatWhereLabel(job.where);
+    let title = '';
+    if (job.type === 'pivot') {
+      const rowsDim = job.rowsDim || 'Description';
+      const colsDim = job.colsDim || 'ProjectId';
+      title = `${job.agg}(${job.metric || 'Value'}) by ${rowsDim} × ${colsDim}${whereTitle ? ' — ' + whereTitle : ''}`;
+    } else {
+      title = `${job.agg}(${job.metric || ''}) by ${job.groupBy}${whereTitle ? ' — ' + whereTitle : ''}`;
+    }
     const head = document.createElement('div');
     head.className = 'card-head';
     const left = document.createElement('div');
@@ -151,6 +259,200 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     filterInput.addEventListener('input', debounce(applyFilterOnChange, 300));
     filterModeSelect.addEventListener('change', applyFilterOnChange);
 
+    // Pivot-specific controls (unified with other cards)
+    // Expose rows/cols/metric/top limits + orientation similar to other edit controls
+    if (job.type === 'pivot' || card.dataset.pivot === 'true') {
+      const prof = PROFILE?.() || window.AGG_PROFILE || window.PROFILE || {};
+      const cols = Array.isArray(prof.columns) ? prof.columns : [];
+      const strCols = cols.filter(c => ['string','date'].includes(c.type)).map(c => c.name);
+      const numCols = cols.filter(c => c.type === 'number').map(c => c.name);
+
+      const prefRows = card.dataset.rowsDim || job.rowsDim || (strCols.includes('Description') ? 'Description' : (strCols[0] || ''));
+      const prefCols = card.dataset.colsDim || job.colsDim || (strCols.includes('ProjectId') ? 'ProjectId' : (strCols[1] || strCols[0] || ''));
+      const prefMetric = card.dataset.metric || job.metric || (numCols.includes('Value') ? 'Value' : (numCols[0] || 'Value'));
+      const prefTopCols = Number(card.dataset.pivotTopCols || (job.pivotOptions && job.pivotOptions.topCols) || 8);
+      const prefTopRows = Number(card.dataset.pivotTopRows || (job.pivotOptions && job.pivotOptions.topRows) || 20);
+      const prefOrientation = card.dataset.pivotOrientation || 'horizontal';
+
+      const pivotWrap = document.createElement('div');
+      pivotWrap.className = 'pivot-controls';
+      pivotWrap.style.display = 'flex';
+      pivotWrap.style.flexWrap = 'wrap';
+      pivotWrap.style.gap = '8px';
+      pivotWrap.style.alignItems = 'center';
+      pivotWrap.style.margin = '6px 0';
+
+      const optionsHtml = (arr, sel) => arr.map(n => `<option value="${n}" ${n === sel ? 'selected' : ''}>${n}</option>`).join('');
+
+      pivotWrap.innerHTML = `
+        <label>Rows:
+          <select class="pivot-rows" style="min-width:140px">${optionsHtml(strCols, prefRows)}</select>
+        </label>
+        <label>Cols:
+          <select class="pivot-cols" style="min-width:140px">${optionsHtml(strCols, prefCols)}</select>
+        </label>
+        <label>Metric:
+          <select class="pivot-metric" style="min-width:140px">${optionsHtml(numCols, prefMetric)}</select>
+        </label>
+        <label>Top Cols:
+          <input class="pivot-topcols" type="number" min="1" max="50" value="${prefTopCols}" style="width:72px"/>
+        </label>
+        <label>Top Rows:
+          <input class="pivot-toprows" type="number" min="1" max="500" value="${prefTopRows}" style="width:80px"/>
+        </label>
+        <label>Orientation:
+          <select class="pivot-orientation" style="min-width:120px">
+            <option value="horizontal" ${prefOrientation === 'horizontal' ? 'selected' : ''}>Horizontal</option>
+            <option value="vertical" ${prefOrientation === 'vertical' ? 'selected' : ''}>Vertical</option>
+          </select>
+        </label>
+        <button class="pivot-apply btn-secondary">Apply Pivot</button>
+      `;
+      controls.appendChild(pivotWrap);
+
+      pivotWrap.querySelector('.pivot-apply').onclick = () => {
+        const r = pivotWrap.querySelector('.pivot-rows').value;
+        const c = pivotWrap.querySelector('.pivot-cols').value;
+        const m = pivotWrap.querySelector('.pivot-metric').value;
+        const tc = Math.max(1, Math.min(50, Number(pivotWrap.querySelector('.pivot-topcols').value) || prefTopCols));
+        const tr = Math.max(1, Math.min(500, Number(pivotWrap.querySelector('.pivot-toprows').value) || prefTopRows));
+        const or = pivotWrap.querySelector('.pivot-orientation').value === 'vertical' ? 'vertical' : 'horizontal';
+
+        card.dataset.pivot = 'true';
+        card.dataset.rowsDim = r || '';
+        card.dataset.colsDim = c || '';
+        card.dataset.metric = m || '';
+        card.dataset.agg = 'sum';
+        card.dataset.pivotTopCols = String(tc);
+        card.dataset.pivotTopRows = String(tr);
+        card.dataset.pivotOrientation = or;
+
+        reRenderCard(card.dataset.showMissing === 'true');
+        debouncedAutoSave();
+      };
+    }
+
+    // Manual card generation: Filtered card by Description (friendly add)
+    try {
+      const prof2 = PROFILE?.() || window.AGG_PROFILE || window.PROFILE || {};
+      const hasDesc = Array.isArray(prof2.columns) && prof2.columns.some(c => c.name === 'Description');
+      if (hasDesc) {
+        const baseRows = (window.AGG_ROWS && Array.isArray(window.AGG_ROWS) ? window.AGG_ROWS : aggregationRows());
+        const sums = new Map();
+        const set = new Set();
+        for (const r of baseRows) {
+          const d = (r && r.Description != null) ? String(r.Description).trim() : '';
+          if (!d || /^total$/i.test(d)) continue;
+          set.add(d);
+          let v = Number(r?.Value);
+          if (!Number.isFinite(v)) {
+            const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
+            v = Number.isFinite(parsed) ? parsed : 0;
+          }
+          sums.set(d, (sums.get(d) || 0) + v);
+        }
+        const descValues = Array.from(set.values()).sort((a,b)=> (sums.get(b)||0) - (sums.get(a)||0)).slice(0, 200);
+
+        const descWrap = document.createElement('div');
+        descWrap.className = 'desc-filter-controls';
+        descWrap.style.display = 'flex';
+        descWrap.style.flexWrap = 'wrap';
+        descWrap.style.gap = '8px';
+        descWrap.style.alignItems = 'center';
+        descWrap.style.margin = '6px 0';
+
+        descWrap.innerHTML = `
+          <label>Filter by Description:
+            <select class="desc-select" style="min-width:220px">
+              <option value="">— choose —</option>
+              ${descValues.map(v => `<option value="${v}">${v}</option>`).join('')}
+            </select>
+          </label>
+          <button class="desc-add btn-secondary">Add Filtered Card</button>
+          <button class="desc-gen btn-secondary" title="Generate Top 10 Description cards">Generate Top 10</button>
+        `;
+        controls.appendChild(descWrap);
+
+        // Helper to build a filtered aggregate job
+        const buildFilteredJob = (desc) => {
+          const names = (prof2.columns || []).map(c => c.name);
+          const groupBy = names.includes('ProjectId')
+            ? 'ProjectId'
+            : ((prof2.columns || []).find(c => c.type === 'string')?.name || 'Description');
+          const metric = names.includes('Value')
+            ? 'Value'
+            : ((prof2.columns || []).find(c => c.type === 'number')?.name || '');
+          return { groupBy, metric, agg: metric ? 'sum' : 'count', where: { Description: desc } };
+        };
+
+        descWrap.querySelector('.desc-add').onclick = async () => {
+          const val = descWrap.querySelector('.desc-select').value;
+          if (!val) { showToast('Select a Description first.', 'warning'); return; }
+          const job2 = buildFilteredJob(val);
+          const grid = document.querySelector('#results');
+          const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
+          if (res && res.card) {
+            grid.appendChild(res.card);
+
+            // Generate AI explanation for the newly added manual card (parity with auto cards)
+            try {
+              if (res.explanationTask) {
+                await generateExplanation(res.explanationTask.agg, res.explanationTask.job, res.explanationTask.card);
+              } else if (res.initialAgg) {
+                await generateExplanation(res.initialAgg, job2, res.card);
+              }
+            } catch (e) {
+              console.warn('Manual desc-add explanation generation failed:', e);
+            }
+
+            // Ensure AI Summary includes this new card
+            try { checkAndGenerateAISummary(); } catch {}
+
+            applyMasonryLayout();
+            debouncedAutoSave();
+            showToast(`Added filtered card for Description=${val}`, 'success');
+          }
+        };
+
+        descWrap.querySelector('.desc-gen').onclick = async () => {
+          const topList = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0, 10).map(([k])=>k);
+          const grid = document.querySelector('#results');
+          const explanationTasks = [];
+
+          for (const label of topList) {
+            const job2 = buildFilteredJob(label);
+            const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
+            if (res && res.card) {
+              grid.appendChild(res.card);
+              if (res.explanationTask) {
+                explanationTasks.push(res.explanationTask);
+              } else if (res.initialAgg) {
+                explanationTasks.push({ agg: res.initialAgg, job: job2, card: res.card });
+              }
+            }
+          }
+
+          // Generate explanations sequentially for the batch-created cards
+          try {
+            for (const task of explanationTasks) {
+              await generateExplanation(task.agg, task.job, task.card);
+            }
+          } catch (e) {
+            console.warn('Manual desc-gen explanation generation failed:', e);
+          }
+
+          // Update AI Summary after batch generation to include new cards
+          try { checkAndGenerateAISummary(); } catch {}
+
+          applyMasonryLayout();
+          debouncedAutoSave();
+          showToast('Generated top 10 Description filtered cards.', 'success');
+        };
+      }
+    } catch (e) {
+      console.warn('Manual Description controls setup failed:', e);
+    }
+
     const chartsContainer = document.createElement('div');
     chartsContainer.className = 'chart-cards';
     cardContent.appendChild(chartsContainer);
@@ -188,17 +490,177 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
             originalJob: { groupBy: job.groupBy, metric: job.metric, agg: job.agg }
         });
 
-        const newAgg = groupAgg(getIncludedRows(), currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
+        const baseRows = aggregationRows();
+        let whereObj = null;
+        try { whereObj = card.dataset.where ? JSON.parse(card.dataset.where) : (job.where || null); } catch { whereObj = job.where || null; }
+        let usedRows = whereObj ? filterRowsByWhere(baseRows, whereObj) : baseRows;
+        usedRows = sanitizeRows(usedRows);
+
+        if (card.dataset.pivot === 'true' || job.type === 'pivot') {
+            const rowsDim = card.dataset.rowsDim || job.rowsDim || 'Description';
+            const colsDim = card.dataset.colsDim || job.colsDim || 'ProjectId';
+            const metric = card.dataset.metric || job.metric || 'Value';
+            const fn = card.dataset.agg || job.agg || 'sum';
+            const topCols = Number(card.dataset.pivotTopCols || (job.pivotOptions && job.pivotOptions.topCols) || 8);
+            const topRows = Number(card.dataset.pivotTopRows || (job.pivotOptions && job.pivotOptions.topRows) || 20);
+            const pvt = pivotAgg(usedRows, rowsDim, colsDim, metric, fn, { topCols, topRows });
+
+            // Re-render pivot table
+            (function renderPivotTable() {
+              tableBox.innerHTML = '';
+              const table = document.createElement('table');
+              const thead = document.createElement('thead');
+              const tbody = document.createElement('tbody');
+              const trh = document.createElement('tr');
+
+              const th0 = document.createElement('th');
+              th0.textContent = rowsDim;
+              th0.className = 'sticky';
+              trh.appendChild(th0);
+              for (const c of pvt.cols) {
+                const th = document.createElement('th');
+                th.textContent = c;
+                th.className = 'sticky';
+                trh.appendChild(th);
+              }
+              const thTot = document.createElement('th');
+              thTot.textContent = 'Total';
+              thTot.className = 'sticky';
+              trh.appendChild(thTot);
+              thead.appendChild(trh);
+
+              for (const r of pvt.rows) {
+                const tr = document.createElement('tr');
+                const tdKey = document.createElement('td');
+                tdKey.textContent = r.key;
+                tr.appendChild(tdKey);
+                r.values.forEach(v => {
+                  const td = document.createElement('td');
+                  td.textContent = formatNumberFull(v);
+                  tr.appendChild(td);
+                });
+                const tdSum = document.createElement('td');
+                tdSum.textContent = formatNumberFull(r.total);
+                tr.appendChild(tdSum);
+                tbody.appendChild(tr);
+              }
+
+              table.appendChild(thead);
+              table.appendChild(tbody);
+              tableBox.appendChild(table);
+            })();
+
+            // Re-render pivot chart
+            (function renderPivotChart() {
+              // Create a pivot chart card with unified controls (orientation, redraw, PNG, add, delete)
+              const createChartCard = () => {
+                const chartCard = document.createElement('div');
+                chartCard.className = 'chart-card';
+
+                const chartHead = document.createElement('div');
+                chartHead.className = 'chart-head';
+                const small = document.createElement('div');
+                small.className = 'small muted';
+                small.textContent = `Chart for: ${fn}(${metric}) by ${rowsDim} × ${colsDim}`;
+
+                const controls = document.createElement('div');
+                controls.className = 'chart-controls';
+                const orientationSel = document.createElement('select');
+                orientationSel.innerHTML = `
+                  <option value="horizontal">Bar (horizontal)</option>
+                  <option value="vertical">Bar (vertical)</option>
+                `;
+                orientationSel.value = (card.dataset.pivotOrientation === 'vertical') ? 'vertical' : 'horizontal';
+                const redrawBtn = document.createElement('button'); redrawBtn.textContent = 'Redraw';
+                const pngBtn = document.createElement('button'); pngBtn.textContent = 'Download PNG';
+                const addChartBtn = document.createElement('button'); addChartBtn.textContent = 'Add Chart';
+                const deleteBtn = document.createElement('button'); deleteBtn.textContent = 'Delete';
+
+                controls.append(orientationSel, redrawBtn, pngBtn, addChartBtn, deleteBtn);
+                chartHead.append(small, controls);
+                chartCard.appendChild(chartHead);
+
+                const chartBox = document.createElement('div');
+                chartBox.className = 'chart-box';
+                const canvas = document.createElement('canvas');
+                chartBox.appendChild(canvas);
+                chartCard.appendChild(chartBox);
+                chartsContainer.appendChild(chartCard);
+
+                const draw = (resize = true) => {
+                  const orientation = (orientationSel.value === 'vertical') ? 'vertical' : 'horizontal';
+                  card.dataset.pivotOrientation = orientation;
+                  const cfg = computePivotChartConfig(pvt, orientation);
+                  ensureChart(canvas, cfg, !!resize);
+                };
+
+                orientationSel.addEventListener('change', () => { draw(true); debouncedAutoSave(); });
+                redrawBtn.onclick = () => { draw(true); debouncedAutoSave(); };
+                pngBtn.onclick = () => {
+                  const filename = `pivot_${rowsDim}_x_${colsDim}.png`;
+                  const url = canvas.toDataURL('image/png');
+                  const a = document.createElement('a');
+                  a.href = url; a.download = filename; a.click();
+                };
+                addChartBtn.onclick = () => {
+                  // Create a new chart card (not clone) to avoid copying listeners incorrectly
+                  const newCard = createChartCard();
+                  // Trigger initial draw for the new card
+                  const newCanvas = newCard.querySelector('canvas');
+                  const newSel = newCard.querySelector('select');
+                  const orientation = (newSel.value === 'vertical') ? 'vertical' : 'horizontal';
+                  const cfg = computePivotChartConfig(pvt, orientation);
+                  ensureChart(newCanvas, cfg, true);
+                  applyMasonryLayout();
+                  debouncedAutoSave();
+                  showToast('New chart card added.', 'success');
+                };
+                deleteBtn.onclick = () => {
+                  try {
+                    const inst = (window.Chart && typeof window.Chart.getChart === 'function') ? window.Chart.getChart(canvas) : null;
+                    if (inst) inst.destroy();
+                  } catch {}
+                  chartCard.remove();
+                  applyMasonryLayout();
+                  debouncedAutoSave();
+                  showToast('Chart deleted.', 'info');
+                };
+
+                draw(true);
+                return chartCard;
+              };
+
+              // Ensure at least one chart exists
+              if (chartsContainer.querySelectorAll('.chart-card').length === 0) {
+                createChartCard();
+              }
+
+              // Redraw all existing pivot charts based on their own controls
+              chartsContainer.querySelectorAll('.chart-card').forEach(chartCard => {
+                const canvas = chartCard.querySelector('canvas');
+                const orientationSel = chartCard.querySelector('select');
+                const o = (orientationSel && orientationSel.value === 'vertical') ? 'vertical' : 'horizontal';
+                const cfg = computePivotChartConfig(pvt, o);
+                ensureChart(canvas, cfg, true);
+              });
+            })();
+
+            sub.textContent = `${pvt.rows.length} rows × ${pvt.cols.length} cols · ${fn}(${metric})`;
+
+            // Avoid generic re-rendering path for pivot
+            return;
+        }
+
+        const newAgg = groupAgg(usedRows, currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
             mode: currentFilterMode,
             value: currentFilterValue
         }, newShowMissing, PROFILE());
 
         card.dataset.showMissing = String(newShowMissing);
 
-        // Clear and re-add warning
         const existingWarnings = card.querySelectorAll('.missing-data-warning');
         existingWarnings.forEach(warning => warning.remove());
-        addMissingDataWarning(card, newAgg, getIncludedRows().length, newShowMissing);
+        addMissingDataWarning(card, newAgg, (typeof usedRows !== 'undefined' ? usedRows.length : aggregationRows().length), newShowMissing);
 
         sub.textContent = `${newAgg.rows.length} groups · ${newAgg.header[1]}`;
         renderAggTable(newAgg, tableBox, 20, newShowMissing, { formatNumberFull });
@@ -212,11 +674,11 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
                 ensureChart(canvas, cfg, true);
             }
         });
-        
+
         const mainContent = $('#main-content');
         const grid = $('#results');
         const scrollY = mainContent.scrollTop;
-        
+
         grid.style.opacity = '0.5';
 
         requestAnimationFrame(() => {
@@ -224,7 +686,7 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
             grid.style.opacity = '1';
             applyMasonryLayout();
         });
-        
+
         // After re-rendering, regenerate the explanation
         generateExplanation(newAgg, job, card);
     }
@@ -239,33 +701,205 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     }
     
     console.time(`buildAggCard:compute:${card.dataset.canonicalKey}`);
-    const initialAgg = groupAgg(getIncludedRows(), job.groupBy, job.metric, job.agg, job.dateBucket || '', {
+    const baseRows = aggregationRows();
+    const usedRows = job.where ? filterRowsByWhere(baseRows, job.where) : baseRows;
+
+    let initialAgg = null;
+    if (job.type === 'pivot' || card.dataset.pivot === 'true') {
+      // Render Pivot (Description × ProjectId) or as specified
+      const rowsDim = card.dataset.rowsDim || job.rowsDim || 'Description';
+      const colsDim = card.dataset.colsDim || job.colsDim || 'ProjectId';
+      const metric = card.dataset.metric || job.metric || 'Value';
+      const fn = card.dataset.agg || job.agg || 'sum';
+      const topCols = Number(card.dataset.pivotTopCols || (job.pivotOptions && job.pivotOptions.topCols) || 8);
+      const topRows = Number(card.dataset.pivotTopRows || (job.pivotOptions && job.pivotOptions.topRows) || 20);
+      const pvt = pivotAgg(usedRows, rowsDim, colsDim, metric, fn, { topCols, topRows });
+      console.timeEnd(`buildAggCard:compute:${card.dataset.canonicalKey}`);
+
+      // Sub header
+      sub.textContent = `${pvt.rows.length} rows × ${pvt.cols.length} cols · ${fn}(${metric})`;
+
+      // Render Pivot Table
+      (function renderPivotTable() {
+        tableBox.innerHTML = '';
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const tbody = document.createElement('tbody');
+        const trh = document.createElement('tr');
+
+        // Header cells
+        const th0 = document.createElement('th');
+        th0.textContent = rowsDim;
+        th0.className = 'sticky';
+        trh.appendChild(th0);
+        for (const c of pvt.cols) {
+          const th = document.createElement('th');
+          th.textContent = c;
+          th.className = 'sticky';
+          trh.appendChild(th);
+        }
+        const thTot = document.createElement('th');
+        thTot.textContent = 'Total';
+        thTot.className = 'sticky';
+        trh.appendChild(thTot);
+        thead.appendChild(trh);
+
+        // Body rows
+        for (const r of pvt.rows) {
+          const tr = document.createElement('tr');
+          const tdKey = document.createElement('td');
+          tdKey.textContent = r.key;
+          tr.appendChild(tdKey);
+          r.values.forEach(v => {
+            const td = document.createElement('td');
+            td.textContent = formatNumberFull(v);
+            tr.appendChild(td);
+          });
+          const tdSum = document.createElement('td');
+          tdSum.textContent = formatNumberFull(r.total);
+          tr.appendChild(tdSum);
+          tbody.appendChild(tr);
+        }
+
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        tableBox.appendChild(table);
+      })();
+
+      // Render stacked chart for pivot
+      (function renderPivotChart() {
+        // Create a pivot chart card with unified controls (orientation, redraw, PNG, add, delete)
+        const createChartCard = () => {
+          const chartCard = document.createElement('div');
+          chartCard.className = 'chart-card';
+
+          const chartHead = document.createElement('div');
+          chartHead.className = 'chart-head';
+          const small = document.createElement('div');
+          small.className = 'small muted';
+          small.textContent = `Chart for: ${fn}(${metric}) by ${rowsDim} × ${colsDim}`;
+
+          const controls = document.createElement('div');
+          controls.className = 'chart-controls';
+          const orientationSel = document.createElement('select');
+          orientationSel.innerHTML = `
+            <option value="horizontal">Bar (horizontal)</option>
+            <option value="vertical">Bar (vertical)</option>
+          `;
+          orientationSel.value = (card.dataset.pivotOrientation === 'vertical') ? 'vertical' : 'horizontal';
+          const redrawBtn = document.createElement('button'); redrawBtn.textContent = 'Redraw';
+          const pngBtn = document.createElement('button'); pngBtn.textContent = 'Download PNG';
+          const addChartBtn = document.createElement('button'); addChartBtn.textContent = 'Add Chart';
+          const deleteBtn = document.createElement('button'); deleteBtn.textContent = 'Delete';
+
+          controls.append(orientationSel, redrawBtn, pngBtn, addChartBtn, deleteBtn);
+          chartHead.append(small, controls);
+          chartCard.appendChild(chartHead);
+
+          const chartBox = document.createElement('div');
+          chartBox.className = 'chart-box';
+          const canvas = document.createElement('canvas');
+          chartBox.appendChild(canvas);
+          chartCard.appendChild(chartBox);
+          chartsContainer.appendChild(chartCard);
+
+          const draw = (resize = true) => {
+            const orientation = (orientationSel.value === 'vertical') ? 'vertical' : 'horizontal';
+            card.dataset.pivotOrientation = orientation;
+            const cfg = computePivotChartConfig(pvt, orientation);
+            ensureChart(canvas, cfg, !!resize);
+          };
+
+          orientationSel.addEventListener('change', () => { draw(true); debouncedAutoSave(); });
+          redrawBtn.onclick = () => { draw(true); debouncedAutoSave(); };
+          pngBtn.onclick = () => {
+            const filename = `pivot_${rowsDim}_x_${colsDim}.png`;
+            const url = canvas.toDataURL('image/png');
+            const a = document.createElement('a');
+            a.href = url; a.download = filename; a.click();
+          };
+          addChartBtn.onclick = () => {
+            // Create a new chart card (not clone) to avoid copying listeners incorrectly
+            const newCard = createChartCard();
+            // Trigger initial draw for the new card
+            const newCanvas = newCard.querySelector('canvas');
+            const newSel = newCard.querySelector('select');
+            const orientation = (newSel.value === 'vertical') ? 'vertical' : 'horizontal';
+            const cfg = computePivotChartConfig(pvt, orientation);
+            ensureChart(newCanvas, cfg, true);
+            applyMasonryLayout();
+            debouncedAutoSave();
+            showToast('New chart card added.', 'success');
+          };
+          deleteBtn.onclick = () => {
+            try {
+              const inst = (window.Chart && typeof window.Chart.getChart === 'function') ? window.Chart.getChart(canvas) : null;
+              if (inst) inst.destroy();
+            } catch {}
+            chartCard.remove();
+            applyMasonryLayout();
+            debouncedAutoSave();
+            showToast('Chart deleted.', 'info');
+          };
+
+          draw(true);
+          return chartCard;
+        };
+
+        // Ensure at least one chart exists
+        if (chartsContainer.querySelectorAll('.chart-card').length === 0) {
+          createChartCard();
+        }
+
+        // Redraw all existing pivot charts based on their own controls
+        chartsContainer.querySelectorAll('.chart-card').forEach(chartCard => {
+          const canvas = chartCard.querySelector('canvas');
+          const orientationSel = chartCard.querySelector('select');
+          const o = (orientationSel && orientationSel.value === 'vertical') ? 'vertical' : 'horizontal';
+          const cfg = computePivotChartConfig(pvt, o);
+          ensureChart(canvas, cfg, true);
+        });
+      })();
+
+      // Build a lightweight initialAgg for downstream (explanations can still work roughly)
+      initialAgg = {
+        header: [rowsDim, `${fn}(${metric})`],
+        rows: pvt.rows.map(r => [r.key, r.total]),
+        totalSum: pvt.grandTotal,
+        rawRowsCount: usedRows.length,
+        missingCount: 0,
+        missingSum: 0,
+        removedRows: []
+      };
+    } else {
+      // Standard (non-pivot) aggregation path
+      initialAgg = groupAgg(usedRows, job.groupBy, job.metric, job.agg, job.dateBucket || '', {
         mode: filterMode,
         value: filterValue
-    }, showMissing, PROFILE());
-    console.timeEnd(`buildAggCard:compute:${card.dataset.canonicalKey}`);
- 
-    addMissingDataWarning(card, initialAgg, getIncludedRows().length, showMissing);
-    sub.textContent = `${initialAgg.rows.length} groups · ${initialAgg.header[1]}`;
- 
-    console.time(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
-    renderAggTable(initialAgg, tableBox, 20, showMissing, { formatNumberFull });
-    console.timeEnd(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
- 
-    // Log chart render start and end times per chart card
-    charts.forEach((chartSnap, ci) => {
+      }, showMissing, PROFILE());
+      console.timeEnd(`buildAggCard:compute:${card.dataset.canonicalKey}`);
+
+      addMissingDataWarning(card, initialAgg, (typeof usedRows !== 'undefined' ? usedRows.length : aggregationRows().length), showMissing);
+      sub.textContent = `${initialAgg.rows.length} groups · ${initialAgg.header[1]}`;
+
+      console.time(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
+      renderAggTable(initialAgg, tableBox, 20, showMissing, { formatNumberFull });
+      console.timeEnd(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
+
+      // Log chart render start and end times per chart card
+      charts.forEach((chartSnap, ci) => {
         const chartLabel = `buildAggCard:renderChart:${card.dataset.canonicalKey}:chart${ci}`;
         console.time(chartLabel);
-        const chartCard = renderChartCard(initialAgg, chartsContainer, chartSnap.type, chartSnap.topN, title.replace(/\s+/g, '_'), { 
-            noAnimation,
-            profile: PROFILE(),
-            showToast,
-            applyMasonryLayout,
-            generateExplanation
+        renderChartCard(initialAgg, chartsContainer, chartSnap.type, chartSnap.topN, title.replace(/\s+/g, '_'), {
+          noAnimation,
+          profile: PROFILE(),
+          showToast,
+          applyMasonryLayout,
+          generateExplanation
         });
-        // If renderChartCard returns synchronously, end the timer immediately; otherwise end in ensureChart callbacks
         console.timeEnd(chartLabel);
-    });
+      });
+    }
 
     if (explanation) {
         console.log(`📄 Using existing explanation for card: ${canonicalKey}`);
@@ -320,13 +954,128 @@ async function getAiAnalysisPlan(context) {
 
     // Fallback to a generic plan if no ERP pattern is matched.
     console.log('No specific ERP plan matched. Using generic fallback.');
-    const plan = autoPlan(context.profile, context.includedRows, context.excludedDimensions);
+    const plan0 = autoPlan(context.profile, context.includedRows, context.excludedDimensions);
+    let jobs = (plan0 && Array.isArray(plan0.jobs)) ? plan0.jobs : [];
+
+    // Defensive fallback for cross-tab → long pipeline:
+    // If autoPlan produced 0 jobs but we have converted long rows (AGG_ROWS),
+    // seed a minimal but useful plan on canonical schema.
+    const hasAggRows = Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length > 0;
+    // Prefer AGG_PROFILE columns; if missing expected long-schema names, fall back to AGG_ROWS keys
+    let names = (context.profile?.columns || []).map(c => c.name);
+    let hasValue = names.includes('Value');
+    let hasPid = names.includes('ProjectId');
+    let hasPname = names.includes('ProjectName');
+    let hasDesc = names.includes('Description');
+
+    if (hasAggRows && (!hasValue || !hasPid || !hasPname || !hasDesc)) {
+        const row0 = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length) ? window.AGG_ROWS[0] : null;
+        const rowNames = row0 ? Object.keys(row0) : [];
+        if (!names || names.length === 0) names = rowNames;
+        hasValue = hasValue || rowNames.includes('Value');
+        hasPid = hasPid || rowNames.includes('ProjectId');
+        hasPname = hasPname || rowNames.includes('ProjectName');
+        hasDesc = hasDesc || rowNames.includes('Description');
+    }
+
+    if ((!jobs || jobs.length === 0) && hasAggRows && hasValue) {
+        console.log('[Fallback] autoPlan returned 0 jobs; using canonical long-schema defaults');
+        const seeded = [];
+        if (hasPid)   seeded.push({ groupBy: 'ProjectId',   metric: 'Value', agg: 'sum' });
+        if (hasPname) seeded.push({ groupBy: 'ProjectName', metric: 'Value', agg: 'sum' });
+        if (hasDesc)  seeded.push({ groupBy: 'Description', metric: 'Value', agg: 'sum' });
+        // Deduplicate defensively and cap at 6
+        jobs = deduplicateJobs(seeded).slice(0, 6);
+    }
+
+    // Prefer Value as metric in long schema; demote Code/ProjectId/RawValue as metrics
+    if (hasAggRows && hasValue && Array.isArray(jobs) && jobs.length > 0) {
+        const bannedMetrics = new Set(['Code','ProjectId','RawValue','CORP_EC','CORP_RE','RE','EC','EC_P','Msia','Total']);
+        jobs = jobs.map(j => {
+            const metric = (!j.metric || bannedMetrics.has(String(j.metric))) ? 'Value' : j.metric;
+            return { ...j, metric, agg: j.agg || 'sum' };
+        });
+        jobs = deduplicateJobs(jobs).slice(0, 10);
+    }
+
+    // Final guard: still empty → pick best-guess numeric metric and first dimension
+    if (!jobs || jobs.length === 0) {
+        console.warn('[Fallback] Canonical defaults unavailable; deriving a minimal job from current profile');
+        const dims = (context.profile?.columns || []).filter(c => c.type === 'string').map(c => c.name);
+        const nums = (context.profile?.columns || []).filter(c => c.type === 'number').map(c => c.name);
+        const g = dims[0] || (columns[0] || '');
+        let m = nums[0] || (hasValue ? 'Value' : '');
+        if (['Code','ProjectId','RawValue'].includes(m) && hasValue) m = 'Value';
+        if (g && m) jobs = [{ groupBy: g, metric: m, agg: 'sum' }];
+    }
+
+    // Enrich plan with filtered breakdowns for top Description categories (cross-tab long schema)
+    try {
+        if (hasAggRows && hasValue && hasDesc) {
+            // Use full converted long rows for robust Top-K (context.includedRows is a tiny sample)
+            const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+              ? window.AGG_ROWS
+              : (Array.isArray(context.includedRows) ? context.includedRows : []);
+            const rows = sanitizeRows(rowsSource);
+
+            const sums = new Map();
+            for (const r of rows) {
+                const d = r && r.Description;
+                if (d === null || d === undefined) continue;
+                const dn = String(d).trim();
+                if (!dn || /^total$/i.test(dn)) continue;
+                let v = Number(r?.Value);
+                if (!Number.isFinite(v)) {
+                    const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
+                    v = Number.isFinite(parsed) ? parsed : NaN;
+                }
+                if (!Number.isFinite(v)) continue;
+                sums.set(dn, (sums.get(dn) || 0) + v);
+            }
+
+            // Top-K by Value (auto Top-10 when cross-tab → long is present)
+            const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
+
+            // Ensure common revenue terms included if present
+            ['Revenue','CONSTRUCTION CONTRACT REVENUE'].forEach(label => {
+                if (sums.has(label) && !topK.includes(label)) topK.push(label);
+            });
+
+            const filtered = [];
+            for (const desc of topK) {
+                filtered.push({ groupBy: 'ProjectId', metric: 'Value', agg: 'sum', where: { Description: desc } });
+            }
+            if (filtered.length) {
+                jobs = deduplicateJobs([...(jobs || []), ...filtered]).slice(0, 12);
+            }
+        }
+    } catch (e) {
+        console.warn('Top-K Description breakdown planning failed:', e);
+    }
+
+    // Add a Pivot template (Description × ProjectId) for long schema
+    try {
+        if (hasAggRows && hasValue && hasDesc && hasPid) {
+            const pivotJob = {
+                type: 'pivot',
+                rowsDim: 'Description',
+                colsDim: 'ProjectId',
+                metric: 'Value',
+                agg: 'sum',
+                pivotOptions: { topCols: 12, topRows: 30 }
+            };
+            jobs = deduplicateJobs([...(jobs || []), pivotJob]).slice(0, 12);
+        }
+    } catch (e) {
+        console.warn('Pivot job planning failed:', e);
+    }
+
     return {
         tasks: [{
             description: 'Run standard automatic analysis',
             type: 'auto-analysis'
         }],
-        jobs: plan.jobs,
+        jobs,
         planType: 'auto-analysis'
     };
 }
@@ -622,7 +1371,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
     console.log('🚀 Starting renderAggregates', { chartsSnapshot: !!chartsSnapshot, retry });
 
     try {
-        const includedRows = getIncludedRows();
+        const includedRows = (window.AGG_ROWS && Array.isArray(window.AGG_ROWS)) ? window.AGG_ROWS : getIncludedRows();
         if (includedRows.length === 0) {
             showToast('No rows selected for aggregation. Please check some rows in the Raw Data table.', 'warning');
             return;
