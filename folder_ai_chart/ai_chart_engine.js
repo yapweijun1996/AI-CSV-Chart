@@ -269,7 +269,10 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
           return;
         }
         
-        resolve({ data, meta, errors });
+        // Pass-through worker-provided detection result and preview when available
+        const detectionResult = results.detectionResult || null;
+        const preview = results.preview || null;
+        resolve({ data, meta, errors, detectionResult, preview });
       } catch (err) {
         console.error('Error in complete callback:', err);
         reject(new Error('Error processing parse results: ' + (err.message || err)));
@@ -355,7 +358,13 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
           return;
         }
         try{
-          const results = { data: Array.isArray(msg.data)?msg.data:[], meta: msg.meta||{}, errors: Array.isArray(msg.errors)?msg.errors:[] };
+          const results = {
+            data: Array.isArray(msg.data)?msg.data:[],
+            meta: msg.meta||{},
+            errors: Array.isArray(msg.errors)?msg.errors:[],
+            detectionResult: ('detectionResult' in msg) ? msg.detectionResult : null,
+            preview: ('preview' in msg) ? msg.preview : null
+          };
           completeHandler(results);
         } finally {
           try{ worker.terminate(); }catch{}

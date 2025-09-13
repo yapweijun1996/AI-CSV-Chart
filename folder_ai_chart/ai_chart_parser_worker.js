@@ -422,6 +422,136 @@ function aggregateForCharts(rows, profile, plan, config = {}) {
 
 // --- End of aggregation logic ---
 
+// --- CSV type detection and preview helpers ---
+function isBlankWorker(v) {
+  return v === null || v === undefined || String(v).trim() === '';
+}
+function isLikelyProjectColumnNameWorker(name) {
+  const s = String(name || '');
+  return /^(?:\d{3,}|[A-Z][A-Z0-9_]+|Total)$/i.test(s);
+}
+function nonNumericStringRatioWorker(obj, keys) {
+  if (!obj || typeof obj !== 'object') return 0;
+  let count = 0, nonNumeric = 0;
+  for (const k of keys) {
+    if (!(k in obj)) continue;
+    const v = obj[k];
+    count++;
+    const n = parseCsvNumber(v);
+    if (!Number.isFinite(n) && !isBlankWorker(v)) nonNumeric++;
+  }
+  return count ? (nonNumeric / count) : 0;
+}
+/**
+ * Heuristic CSV type detection on parsed rows (object rows expected when header=true).
+ * Returns:
+ * { type: 'long'|'cross-tab'|'unknown', isCrossTab, confidence, headerRows, idCols, dataStartRow, projectCols }
+ */
+function detectCSVType(rows) {
+  try {
+    if (!Array.isArray(rows) || !rows.length) {
+      return { type: 'unknown', isCrossTab: false, confidence: 0, headerRows: 1, idCols: [], dataStartRow: 0, projectCols: [] };
+    }
+    const r0 = rows[0];
+    if (!r0 || typeof r0 !== 'object') {
+      return { type: 'unknown', isCrossTab: false, confidence: 0, headerRows: 1, idCols: [], dataStartRow: 0, projectCols: [] };
+    }
+    const keys = Object.keys(r0);
+    const hasCode = keys.includes('Code');
+    const hasDesc = keys.includes('Description');
+    const idCols = [];
+    if (hasCode) idCols.push('Code');
+    if (hasDesc) idCols.push('Description');
+
+    // Consider all non-id columns as potential project columns
+    const projectCandidates = keys.filter(k => !idCols.includes(k));
+    const projLike = projectCandidates.filter(isLikelyProjectColumnNameWorker);
+    const projLikeRatio = projectCandidates.length ? (projLike.length / projectCandidates.length) : 0;
+
+    // Cross-tab heuristic: first data row carries textual labels in project columns,
+    // while id columns in first row are blank (double-header pattern).
+    const codeBlank = hasCode ? isBlankWorker(r0['Code']) : false;
+    const descBlank = hasDesc ? isBlankWorker(r0['Description']) : false;
+    const labelRatio = nonNumericStringRatioWorker(r0, projLike);
+
+    const isCross =
+      hasCode && hasDesc &&
+      projectCandidates.length >= 5 &&
+      projLikeRatio >= 0.4 &&
+      codeBlank && descBlank &&
+      labelRatio >= 0.3;
+
+    const confParts = [
+      hasCode ? 0.2 : 0,
+      hasDesc ? 0.2 : 0,
+      Math.min(0.2, projLikeRatio * 0.2 / 0.6),
+      codeBlank ? 0.2 : 0,
+      descBlank ? 0.1 : 0,
+      Math.min(0.1, labelRatio * 0.1 / 0.5)
+    ];
+    const confidence = confParts.reduce((a,b)=>a+b, 0);
+
+    if (isCross) {
+      return {
+        type: 'cross-tab',
+        isCrossTab: true,
+        confidence,
+        headerRows: 2,
+        idCols: ['Code', 'Description'],
+        dataStartRow: 1, // after label row (row 0)
+        projectCols: projLike
+      };
+    }
+
+    // Attempt to classify as long if we have a canonical long schema subset
+    const hasLongCore = ['Code','Description'].every(k => keys.includes(k))
+                      && (keys.includes('Value') || keys.some(k => /amount|total|value|sales|revenue/i.test(k)));
+    if (hasLongCore) {
+      return {
+        type: 'long',
+        isCrossTab: false,
+        confidence: Math.max(0.4, confidence), // bump a bit if it looks structured
+        headerRows: 1,
+        idCols: ['Code','Description'].filter(k => keys.includes(k)),
+        dataStartRow: 0,
+        projectCols: []
+      };
+    }
+
+    return {
+      type: 'unknown',
+      isCrossTab: false,
+      confidence,
+      headerRows: 1,
+      idCols,
+      dataStartRow: 0,
+      projectCols: []
+    };
+  } catch (e) {
+    return { type: 'unknown', isCrossTab: false, confidence: 0, headerRows: 1, idCols: [], dataStartRow: 0, projectCols: [], error: String(e) };
+  }
+}
+
+function buildPreview(rows, limit = 20) {
+  try {
+    if (!Array.isArray(rows) || !rows.length) {
+      return { columns: [], sample: [], rowCount: 0 };
+    }
+    const first = rows[0];
+    const columns = typeof first === 'object' && first !== null ? Object.keys(first) : [];
+    const n = Math.min(limit, rows.length);
+    const sample = rows.slice(0, n).map(r => {
+      if (typeof r !== 'object' || r === null) return r;
+      const o = {};
+      for (const c of columns) o[c] = r[c];
+      return o;
+    });
+    return { columns, sample, rowCount: rows.length };
+  } catch (e) {
+    return { columns: [], sample: [], rowCount: 0, error: String(e) };
+  }
+}
+
 self.onmessage = function(event){
   try {
     const payload = event.data || {};
@@ -465,7 +595,22 @@ self.onmessage = function(event){
           const meta = results && results.meta ? results.meta : {};
           const errors = results && Array.isArray(results.errors) ? results.errors : [];
           const data = (results && Array.isArray(results.data) && results.data.length) ? results.data : collectedRows;
-          self.postMessage({ error:false, data, meta, errors });
+ 
+          // Compute detection + preview safely (object rows expected when header=true)
+          let detectionResult = null;
+          try {
+            detectionResult = detectCSVType(data);
+          } catch (e) {
+            detectionResult = { type: 'unknown', isCrossTab: false, confidence: 0, headerRows: 1, idCols: [], dataStartRow: 0, projectCols: [], error: String(e) };
+          }
+          let preview = null;
+          try {
+            preview = buildPreview(data, 20);
+          } catch (e) {
+            preview = { columns: [], sample: [], rowCount: Array.isArray(data)?data.length:0, error: String(e) };
+          }
+ 
+          self.postMessage({ error:false, data, meta, errors, detectionResult, preview });
         }catch(err){
           self.postMessage({ error:true, message: 'Worker complete handler error: ' + (err.message || String(err)) });
         }

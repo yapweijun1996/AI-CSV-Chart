@@ -992,12 +992,17 @@ $('#loadBtn').onclick = async ()=>{
   $('#meta').textContent='Parsing…';
   try{
     const choice=$('#delimiter').value, header=$('#hasHeader').checked;
-    const {data, meta}=await parseCSV(f, choice, header, progress => {
+    const { data, meta, detectionResult, preview } = await parseCSV(f, choice, header, progress => {
         if (progress.type === 'meta') {
             $('#meta').textContent = progress.text;
         }
     });
     if(!data.length) throw new Error('No rows detected (check delimiter/header).');
+    // Persist meta/preview/detection from worker
+    window.PARSE_PREVIEW = preview || null;
+    window.CSV_DETECTION = detectionResult || null;
+    LAST_PARSE_META = meta || null;
+
     ROWS=data; window.ROWS = ROWS; window.currentData = data; DATA_COLUMNS = Object.keys(ROWS[0] || {}); window.DATA_COLUMNS = DATA_COLUMNS;
     const dateFormat = $('#dateFormat').value;
     PROFILE=profile(ROWS, dateFormat); window.PROFILE = PROFILE; renderProfile(PROFILE, LAST_PARSE_META);
@@ -1019,7 +1024,8 @@ $('#loadBtn').onclick = async ()=>{
     }
     // Detect cross-tab and convert to long for aggregation
     try {
-      const detection = detectCrossTab(ROWS);
+      const workerDetection = window.CSV_DETECTION;
+      const detection = workerDetection || detectCrossTab(ROWS);
       window.CROSSTAB_DETECTION = detection;
       if (detection && detection.isCrossTab) {
         const defaultOptions = {
@@ -1051,7 +1057,11 @@ $('#loadBtn').onclick = async ()=>{
       hideConvertedSection();
     }
 
-    $('#meta').textContent=`Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns. (delimiter="${meta.delimiter}")`;
+    {
+      const det = window.CROSSTAB_DETECTION;
+      const detTxt = det ? `, detected="${det.type || (det.isCrossTab ? 'cross-tab' : 'unknown')}"${typeof det.confidence === 'number' ? ` (${(det.confidence*100).toFixed(0)}%)` : ''}` : '';
+      $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns. (delimiter="${meta.delimiter}"${detTxt})`;
+    }
     const resultsEl = $('#results');
     if (resultsEl) {
         resultsEl.innerHTML = '';
@@ -1500,7 +1510,7 @@ window.addEventListener('message', async (event) => {
         console.log('⚙️ Parse settings - Delimiter:', choice, 'Has header:', hasHeader);
         
         console.log('🚀 Starting parseCSV...');
-        const {data, meta} = await parseCSV(csvFile, choice, hasHeader);
+        const { data, meta, detectionResult, preview } = await parseCSV(csvFile, choice, hasHeader);
         
         console.log('✅ parseCSV completed');
         console.log('📊 Parse results:');
@@ -1521,6 +1531,9 @@ window.addEventListener('message', async (event) => {
         
         // Set global variables same as loadBtn onclick
         console.log('🔧 Setting global variables...');
+        window.PARSE_PREVIEW = preview || null;
+        window.CSV_DETECTION = detectionResult || null;
+
         ROWS = data; window.ROWS = ROWS; window.currentData = data;
         DATA_COLUMNS = Object.keys(ROWS[0] || {}); window.DATA_COLUMNS = DATA_COLUMNS;
         
@@ -1547,7 +1560,11 @@ window.addEventListener('message', async (event) => {
         
         renderProfile(PROFILE);
         
-        $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns from table data. (delimiter="${meta.delimiter}")`;
+        {
+          const det = window.CROSSTAB_DETECTION;
+          const detTxt = det ? `, detected="${det.type || (det.isCrossTab ? 'cross-tab' : 'unknown')}"${typeof det.confidence === 'number' ? ` (${(det.confidence*100).toFixed(0)}%)` : ''}` : '';
+          $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns from table data. (delimiter="${meta.delimiter}"${detTxt})`;
+        }
         $('#results').innerHTML = '';
         
         // Initialize row inclusion with smart detection
@@ -1571,7 +1588,8 @@ window.addEventListener('message', async (event) => {
 
         // Detect cross-tab and convert to long for aggregation (table_csv path)
         try {
-          const detection = detectCrossTab(ROWS);
+          const workerDetection = window.CSV_DETECTION;
+          const detection = workerDetection || detectCrossTab(ROWS);
           window.CROSSTAB_DETECTION = detection;
           if (detection && detection.isCrossTab) {
             const defaultOptions = {

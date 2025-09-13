@@ -925,12 +925,20 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   const newMetric = editPanel.querySelector('#edit-metric').value || null;
   const newFunction = editPanel.querySelector('#edit-function').value || (newMetric ? 'sum' : 'count');
 
-  // Try multiple ways to obtain the "included rows" array:
+  // Try multiple ways to obtain the "included rows" array (original selection set)
   const includedRows =
     (typeof options?.getIncludedRows === 'function') ? options.getIncludedRows()
     : (typeof window.getIncludedRows === 'function') ? window.getIncludedRows()
     : (typeof getIncludedRows === 'function') ? getIncludedRows()
     : (Array.isArray(window.ROWS) ? window.ROWS : []);
+
+  // Prefer converted long rows for aggregation if available (prevents blank charts after schema mapping)
+  const candidateAggRows = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+    ? window.AGG_ROWS
+    : includedRows;
+
+  // Use aggregation profile when available (AGG_PROFILE aligns with AGG_ROWS)
+  const activeProfile = (window.AGG_PROFILE || profile);
 
   // Parent card controls (filter/minGroupShare and showMissing)
   const parentCardNow = c.closest('.card') || parentCard;
@@ -938,21 +946,28 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   const currentFilterMode = parentCardNow?.querySelector('.filter-mode-select')?.value || 'share';
   const showMissingFlag = parentCardNow?.dataset?.showMissing === 'true';
 
-  // Determine date bucket based on selected group type
-  const selCol = (profile?.columns || []).find(x => x.name === newGroupBy);
+  // Determine date bucket based on selected group type (from active profile)
+  const selCol = (activeProfile?.columns || []).find(x => x.name === newGroupBy);
   const selectedBucket = (selCol?.type === 'date') ? (editPanel.querySelector('#edit-bucket')?.value || '') : '';
 
-  // Recompute aggregate
-  const newAgg = groupAgg(
-    includedRows,
-    newGroupBy,
-    newMetric,
-    newFunction,
-    selectedBucket,
-    { mode: currentFilterMode, value: currentFilterValue },
-    !!showMissingFlag,
-    profile
-  );
+  // Recompute aggregate (defensive try/catch to avoid blank state on error)
+  let newAgg;
+  try {
+    newAgg = groupAgg(
+      candidateAggRows,
+      newGroupBy,
+      newMetric,
+      newFunction,
+      selectedBucket,
+      { mode: currentFilterMode, value: currentFilterValue },
+      !!showMissingFlag,
+      activeProfile
+    );
+  } catch (e) {
+    console.error('edit-apply aggregation failed:', e);
+    if (typeof showToast === 'function') showToast('Apply failed: ' + (e?.message || e), 'error');
+    return;
+  }
 
   // Update agg used by this card and UI
   agg.header = newAgg.header;
@@ -991,7 +1006,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
 
   // Re-add missing-data warning
   parentCard?.querySelectorAll('.missing-data-warning').forEach(w => w.remove());
-  addMissingDataWarning(parentCard, newAgg, (includedRows?.length || 0), !!showMissingFlag);
+  addMissingDataWarning(parentCard, newAgg, (candidateAggRows?.length || 0), !!showMissingFlag);
 
   // Close edit panel
   editPanel.style.display = 'none';
