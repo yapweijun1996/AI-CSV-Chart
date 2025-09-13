@@ -101,6 +101,8 @@ export function updateAiTodoList(data) {
     const apiKey = localStorage.getItem('gemini_api_key');
     if (isValidApiKey(apiKey)) {
         container.style.display = 'block';
+        // Apply compact UI style for AI todo list section (Phase 1 quick fix)
+        try { container.classList.add('ai-todo-compact'); } catch {}
     } else {
         container.style.display = 'none';
         return;
@@ -121,9 +123,9 @@ export function updateAiTodoList(data) {
         `;
         
         todoList.innerHTML = `
-            <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+            <li class="task-item task-in-progress">
                 <div class="task-content">
-                    <span class="task-icon in-progress">🤖</span>
+                    <span class="task-icon in-progress">⟳</span>
                     <div class="task-info">
                         <div class="task-description">Generating AI Agent analysis plan...</div>
                         <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
@@ -132,13 +134,8 @@ export function updateAiTodoList(data) {
             </li>
         `;
         
-        // Override CSS !important rules that hide the todo list
-        todoList.style.setProperty('display', 'block', 'important');
-        todoList.style.setProperty('visibility', 'visible', 'important');
-        todoList.style.setProperty('opacity', '1', 'important');
-        todoList.style.setProperty('height', 'auto', 'important');
-        todoList.style.setProperty('overflow', 'visible', 'important');
-        console.log('🔧 Overriding CSS !important rules to show todoList');
+        // List is visible via CSS/classes; avoid runtime !important overrides
+        console.log('AI Agent loading state prepared');
         
         console.log('🤖 Showing AI Agent loading state, todoList innerHTML length:', todoList.innerHTML.length);
         console.log('🔍 todoList computed styles:', window.getComputedStyle(todoList).display);
@@ -191,12 +188,7 @@ export function updateAiTodoList(data) {
     // Enhanced todo list with better UI
     todoList.innerHTML = '';
     
-    // Override CSS !important rules that hide the todo list
-    todoList.style.setProperty('display', 'block', 'important');
-    todoList.style.setProperty('visibility', 'visible', 'important');
-    todoList.style.setProperty('opacity', '1', 'important');
-    todoList.style.setProperty('height', 'auto', 'important');
-    todoList.style.setProperty('overflow', 'visible', 'important');
+    // Visibility handled by CSS/classes (no inline !important)
     
     console.log('📝 Populating regular todo list with', tasks.length, 'tasks');
     
@@ -214,17 +206,7 @@ export function updateAiTodoList(data) {
             const groupHeader = document.createElement('li');
             groupHeader.className = 'task-group-header';
             
-            // ✅ CRITICAL: Override CSS !important rules for group headers too
-            groupHeader.style.setProperty('display', 'list-item', 'important');
-            groupHeader.style.setProperty('visibility', 'visible', 'important');
-            groupHeader.style.setProperty('opacity', '1', 'important');
-            groupHeader.style.setProperty('height', 'auto', 'important');
-            groupHeader.style.setProperty('overflow', 'visible', 'important');
-            groupHeader.style.setProperty('margin', '12px 0 4px 0', 'important');
-            groupHeader.style.setProperty('padding', '0', 'important');
-            groupHeader.style.setProperty('font-weight', 'bold', 'important');
-            groupHeader.style.setProperty('color', '#666', 'important');
-            
+            // Group header styling handled in CSS
             groupHeader.innerHTML = `<div class="group-title">${type.toUpperCase().replace('-', ' ')}</div>`;
             todoList.appendChild(groupHeader);
             console.log(`📂 Added group header with !important overrides: ${type.toUpperCase()}`);
@@ -234,25 +216,19 @@ export function updateAiTodoList(data) {
             const li = document.createElement('li');
             li.className = `task-item task-${task.status} task-type-${task.type || 'general'}`;
             
-            // ✅ CRITICAL: Override CSS !important rules for each task item
-            li.style.setProperty('display', 'list-item', 'important');
-            li.style.setProperty('visibility', 'visible', 'important');
-            li.style.setProperty('opacity', '1', 'important');
-            li.style.setProperty('height', 'auto', 'important');
-            li.style.setProperty('overflow', 'visible', 'important');
-            li.style.setProperty('margin', '0', 'important');
-            li.style.setProperty('padding', '8px 0', 'important');
+            // Per-item visibility handled via CSS (no inline overrides)
             
+            // Use minimalist glyphs to reduce visual noise (avoid emoji badges)
             const statusIcon = {
-                'pending': '⏳',
-                'in-progress': task.type === 'api-call' ? '🌐' : 
-                              task.type === 'ai-generation' ? '🤖' : 
-                              task.type === 'analysis' ? '📊' : '🔄',
-                'completed': '✅',
-                'error': '❌',
-                'cancelled': '⏹️',
-                'retrying': '🔄'
-            }[task.status] || '❓';
+                'pending': '…',
+                'in-progress': task.type === 'api-call' ? '↻' :
+                               task.type === 'ai-generation' ? '⟳' :
+                               task.type === 'analysis' ? '⋯' : '⟳',
+                'completed': '✓',
+                'error': '×',
+                'cancelled': '⏹',
+                'retrying': '⟳'
+            }[task.status] || '•';
             
             const timeInfo = task.timestamp ? 
                 new Date(task.timestamp).toLocaleTimeString() : '';
@@ -551,14 +527,9 @@ export function updateAiTodoList(data) {
         }
     }
     
-    // Final visibility check - override CSS !important rules
+    // Final visibility: rely on CSS; avoid inline !important overrides
     if (todoList && container.style.display === 'block') {
-        todoList.style.setProperty('display', 'block', 'important');
-        todoList.style.setProperty('visibility', 'visible', 'important');
-        todoList.style.setProperty('opacity', '1', 'important');
-        todoList.style.setProperty('height', 'auto', 'important');
-        todoList.style.setProperty('overflow', 'visible', 'important');
-        console.log('🔧 Final todoList visibility check - overriding CSS !important rules');
+        // no-op: CSS ensures visibility
     }
 }
 
@@ -820,8 +791,14 @@ export function initWorkflowUI(deps) {
     
     workflowDeps = deps;
     
-    // Inject CSS override/style block
-    injectCSSOverrides();
+    // Ensure compact styling class is present on the workflow section
+    try {
+        const workflowSection = document.getElementById('ai-todo-list-section');
+        if (workflowSection) workflowSection.classList.add('ai-todo-compact');
+    } catch {}
+    
+    // Legacy CSS override injection disabled to avoid !important conflicts with compact UI
+    // injectCSSOverrides();
     
     // Inject workflow stylesheet link
     injectWorkflowStylesheet();
@@ -913,6 +890,8 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
                 if (container && todoList && progressBar && currentTaskDetails) {
                     // Force show the workflow section immediately
                     container.style.display = 'block';
+                    // Ensure compact styling is applied
+                    try { container.classList.add('ai-todo-compact'); } catch {}
                     
                     // Show starting state
                     progressBar.style.width = '5%';

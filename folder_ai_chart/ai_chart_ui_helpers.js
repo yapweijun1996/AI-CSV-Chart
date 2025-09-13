@@ -1153,17 +1153,12 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
                 </div>
             `;
             
-            // Override CSS !important rules
-            todoList.style.setProperty('display', 'block', 'important');
-            todoList.style.setProperty('visibility', 'visible', 'important');
-            todoList.style.setProperty('opacity', '1', 'important');
-            todoList.style.setProperty('height', 'auto', 'important');
-            todoList.style.setProperty('overflow', 'visible', 'important');
+            // Visibility handled by CSS classes; avoid inline overrides
             
             todoList.innerHTML = `
-                <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                <li class="task-item task-in-progress">
                     <div class="task-content">
-                        <span class="task-icon in-progress">🌐</span>
+                        <span class="task-icon in-progress">⟳</span>
                         <div class="task-info">
                             <div class="task-description">Calling Gemini API for intelligent analysis...</div>
                             <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
@@ -1194,17 +1189,12 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
                 </div>
             `;
             
-            // Override CSS !important rules  
-            todoList.style.setProperty('display', 'block', 'important');
-            todoList.style.setProperty('visibility', 'visible', 'important');
-            todoList.style.setProperty('opacity', '1', 'important');
-            todoList.style.setProperty('height', 'auto', 'important');
-            todoList.style.setProperty('overflow', 'visible', 'important');
+            // Visibility handled by CSS classes; avoid inline overrides
             
             todoList.innerHTML = `
-                <li class="task-item task-in-progress" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                <li class="task-item task-in-progress">
                     <div class="task-content">
-                        <span class="task-icon in-progress">⚙️</span>
+                        <span class="task-icon in-progress">⟳</span>
                         <div class="task-info">
                             <div class="task-description">Processing AI response and generating tasks...</div>
                             <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
@@ -1401,17 +1391,12 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
                     </div>
                 `;
                 
-                // Override CSS !important rules
-                todoList.style.setProperty('display', 'block', 'important');
-                todoList.style.setProperty('visibility', 'visible', 'important');
-                todoList.style.setProperty('opacity', '1', 'important');
-                todoList.style.setProperty('height', 'auto', 'important');
-                todoList.style.setProperty('overflow', 'visible', 'important');
+                // Visibility handled by CSS classes; avoid inline overrides
                 
                 todoList.innerHTML = `
-                    <li class="task-item task-completed" style="display: block !important; visibility: visible !important; opacity: 1 !important; height: auto !important; overflow: visible !important;">
+                    <li class="task-item task-completed">
                         <div class="task-content">
-                            <span class="task-icon completed">✅</span>
+                            <span class="task-icon completed">✓</span>
                             <div class="task-info">
                                 <div class="task-description">AI Agent plan generated - ${workflowTasks.length} tasks ready</div>
                                 <div class="task-timestamp">${new Date().toLocaleTimeString()}</div>
