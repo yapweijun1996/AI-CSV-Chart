@@ -806,8 +806,21 @@ const currentGroupBy = parentCard?.dataset?.groupBy || agg.header?.[0] || '';
 const currentMetricName = parentCard?.dataset?.metric || '';
 const currentAggName = parentCard?.dataset?.agg || (currentMetricName ? 'sum' : 'count');
 
-const dimOptions = (profile?.columns || [])
-  .filter(c => ['string', 'date'].includes(c.type))
+const dimCandidates = (profile?.columns || [])
+  .filter(c => ['string', 'date', 'number'].includes(c.type));
+
+const ensureProjectId = (cols) => {
+  try {
+    const hasPid = cols.some(c => c.name === 'ProjectId');
+    if (!hasPid) {
+      const pid = (profile?.columns || []).find(c => c.name === 'ProjectId');
+      if (pid) return [...cols, pid];
+    }
+  } catch {}
+  return cols;
+};
+
+const dimOptions = ensureProjectId(dimCandidates)
   .map(c => `<option value="${c.name}" ${c.name === currentGroupBy ? 'selected' : ''}>${c.name}</option>`)
   .join('');
 
@@ -840,6 +853,9 @@ editPanel.innerHTML = `
     </label>
     <label id="edit-bucket-wrap">Date bucket:
       <select id="edit-bucket">${bucketOptions}</select>
+    </label>
+    <label id="edit-where-desc-wrap" style="display:none">Filter: Description
+      <select id="edit-where-desc"><option value="">None</option></select>
     </label>
     <div style="display:flex;gap:6px;">
       <button id="edit-apply" style="background:#2563eb;color:#fff;border:none;padding:6px 10px;border-radius:4px;">Apply</button>
@@ -943,6 +959,51 @@ editBtn.onclick = () => {
 
     // Finalize bucket visibility after presets
     syncBucketVisibility();
+
+    // Populate 'Filter: Description' options when Description column is available
+    try {
+      const wrap = editPanel.querySelector('#edit-where-desc-wrap');
+      const sel = editPanel.querySelector('#edit-where-desc');
+      const activeProfile = (window.AGG_PROFILE || profile);
+      const hasDesc = (activeProfile?.columns || []).some(x => x.name === 'Description');
+      if (wrap) wrap.style.display = hasDesc ? '' : 'none';
+      if (hasDesc && sel) {
+        // Prefer converted long rows for options
+        const includedRows =
+          (typeof options?.getIncludedRows === 'function') ? options.getIncludedRows()
+          : (typeof window.getIncludedRows === 'function') ? window.getIncludedRows()
+          : (Array.isArray(window.ROWS) ? window.ROWS : []);
+        const candidateAggRows = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+          ? window.AGG_ROWS
+          : includedRows;
+
+        const sums = new Map();
+        for (const r of candidateAggRows || []) {
+          const d = (r && r.Description != null) ? String(r.Description).trim() : '';
+          if (!d || /^total$/i.test(d)) continue;
+          let v = Number(r?.Value);
+          if (!Number.isFinite(v)) {
+            const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
+            v = Number.isFinite(parsed) ? parsed : 1; // fall back to count weight
+          }
+          sums.set(d, (sums.get(d) || 0) + v);
+        }
+        const items = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,200).map(([k])=>k);
+
+        sel.innerHTML = '<option value="">None</option>' + items.map(v => `<option value="${v}">${v}</option>`).join('');
+
+        // Preset current Description from existing where if present
+        let whereObj = null;
+        try { whereObj = (c.closest('.card') || parentCard)?.dataset?.where ? JSON.parse((c.closest('.card') || parentCard).dataset.where) : null; } catch {}
+        const preset = whereObj && typeof whereObj === 'object' ? String(whereObj.Description ?? '') : '';
+        if (preset && sel.querySelector(`option[value="${preset.replace(/"/g, '"')}"]`)) {
+          sel.value = preset;
+        } else {
+          sel.value = '';
+        }
+      }
+    } catch (e) { console.warn('Failed to populate Description options:', e); }
+
   } else {
     editPanel.style.display = 'none';
     editBtn.textContent = 'Edit';
@@ -986,10 +1047,43 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   const selectedBucket = (selCol?.type === 'date') ? (editPanel.querySelector('#edit-bucket')?.value || '') : '';
 
   // Recompute aggregate (defensive try/catch to avoid blank state on error)
+  // Apply where filter (Description) before aggregation
+  const descWrap = editPanel.querySelector('#edit-where-desc-wrap');
+  const descSel = editPanel.querySelector('#edit-where-desc');
+  let existingWhere = null;
+  try { existingWhere = parentCardNow?.dataset?.where ? JSON.parse(parentCardNow.dataset.where) : null; } catch {}
+  let newWhere = (existingWhere && typeof existingWhere === 'object') ? { ...existingWhere } : null;
+  const selectedDesc = (descSel && descWrap && descWrap.style.display !== 'none') ? String(descSel.value || '').trim() : '';
+  if (selectedDesc) {
+    newWhere = newWhere || {};
+    newWhere.Description = selectedDesc;
+  } else if (newWhere && 'Description' in newWhere) {
+    delete newWhere.Description;
+    if (Object.keys(newWhere).length === 0) newWhere = null;
+  }
+  const filterRowsByWhereLocal = (rows, where) => {
+    if (!where || typeof where !== 'object') return rows;
+    const entries = Object.entries(where);
+    if (entries.length === 0) return rows;
+    return (rows || []).filter(r => {
+      for (const [k, v] of entries) {
+        const rv = r?.[k];
+        if (Array.isArray(v)) {
+          const set = new Set(v.map(x => String(x ?? '').trim()));
+          if (!set.has(String(rv ?? '').trim())) return false;
+        } else {
+          if (String(rv ?? '').trim() !== String(v ?? '').trim()) return false;
+        }
+      }
+      return true;
+    });
+  };
+  const usedRowsForAgg = filterRowsByWhereLocal(candidateAggRows, newWhere);
+
   let newAgg;
   try {
     newAgg = groupAgg(
-      candidateAggRows,
+      usedRowsForAgg,
       newGroupBy,
       newMetric,
       newFunction,
@@ -1016,6 +1110,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
     parentCard.dataset.metric = newMetric || '';
     parentCard.dataset.agg = newFunction || '';
     parentCard.dataset.dateBucket = selectedBucket || '';
+    try { if (newWhere) { parentCard.dataset.where = JSON.stringify(newWhere); } else { delete parentCard.dataset.where; } } catch {}
   }
 
   // Re-render table and charts in this card (same approach used elsewhere)
@@ -1055,7 +1150,7 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
 
   // Re-add missing-data warning
   parentCard?.querySelectorAll('.missing-data-warning').forEach(w => w.remove());
-  addMissingDataWarning(parentCard, newAgg, (candidateAggRows?.length || 0), !!showMissingFlag);
+  addMissingDataWarning(parentCard, newAgg, (usedRowsForAgg?.length || 0), !!showMissingFlag);
 
   // Close edit panel
   editPanel.style.display = 'none';
