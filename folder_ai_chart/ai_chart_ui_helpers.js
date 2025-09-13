@@ -1104,7 +1104,8 @@ async function getIntelligentAiAnalysisPlan(context) {
                 sampleValues: col.values ? col.values.slice(0, 5) : []
             })),
             rowCount: context.profile.rowCount,
-            sampleRows: context.includedRows.slice(0, 3)
+            // Use a larger sample so the model can infer schema/patterns better
+            sampleRows: context.includedRows.slice(0, 50)
         };
 
         const prompt = `You are an expert data analyst. Analyze this dataset and create a comprehensive analysis plan.
@@ -1215,39 +1216,156 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
             console.log('⚙️ Updated UI to show response processing');
         }
         
-        // Parse AI response
+        // Parse AI response — Robust extraction (code-fence + fallback + light cleanup)
         let aiPlan;
+        let __aiRawJobsCount = 0;
         try {
-            // Extract JSON from response (in case there's extra text)
-            const jsonMatch = response.match(/\{[\s\S]*\}/);
-            const jsonString = jsonMatch ? jsonMatch[0] : response;
-            aiPlan = JSON.parse(jsonString);
+            const extractJson = (text) => {
+                if (typeof text !== 'string') return null;
+                // 1) Prefer fenced ```json ... ```
+                let m = text.match(/```json\s*([\s\S]*?)\s*```/i);
+                if (m && m[1]) return m[1].trim();
+                // 2) Any fenced ``` ... ```
+                m = text.match(/```\s*([\s\S]*?)\s*```/);
+                if (m && m[1]) return m[1].trim();
+                // 3) First {...} to last } slice
+                const first = text.indexOf('{');
+                const last = text.lastIndexOf('}');
+                if (first !== -1 && last !== -1 && last > first) {
+                    return text.slice(first, last + 1).trim();
+                }
+                return text.trim();
+            };
+            let jsonString = extractJson(response);
+            try {
+                aiPlan = JSON.parse(jsonString);
+            } catch (e1) {
+                // Light cleanup: strip stray backticks + trailing commas before } or ]
+                const cleaned = (jsonString || '')
+                    .replace(/^[`]+|[`]+$/g, '')
+                    .replace(/,\s*([}\]])/g, '$1');
+                aiPlan = JSON.parse(cleaned);
+            }
+            __aiRawJobsCount = Array.isArray(aiPlan?.jobs) ? aiPlan.jobs.length : 0;
             
             // Validate the plan structure
             if (!aiPlan.jobs || !Array.isArray(aiPlan.jobs)) {
                 throw new Error('Invalid plan structure from AI');
             }
 
-            // Validate that columns exist in the dataset
+            // Validate + normalize jobs (relaxed rules):
+            // - allow count without metric
+            // - map avg -> sum (business-friendly default)
+            // - for sum/min/max, backfill a reasonable numeric metric if missing/invalid
             const columnNames = context.profile.columns.map(c => c.name);
-            aiPlan.jobs = aiPlan.jobs.filter(job => 
-                columnNames.includes(job.groupBy) && 
-                columnNames.includes(job.metric) &&
-                ['sum', 'avg', 'count', 'max', 'min'].includes(job.agg)
-            );
+            const numericCols = context.profile.columns.filter(c => c.type === 'number').map(c => c.name);
+            let __validJobsCount = 0;
+            const normalizedJobs = (aiPlan.jobs || [])
+                .map(job => {
+                    let agg = String(job.agg || '').toLowerCase();
+                    const groupBy = job.groupBy;
+                    let metric = job.metric;
+
+                    // map avg -> sum by default (avg is often misleading for transactional data)
+                    if (agg === 'avg') agg = 'sum';
+
+                    if ((!metric || !columnNames.includes(metric)) && ['sum','min','max'].includes(agg)) {
+                        metric = preferFinancialMetric(numericCols) || numericCols[0] || metric || null;
+                    }
+
+                    return { ...job, agg, groupBy, metric: metric || null };
+                })
+                .filter(job =>
+                    columnNames.includes(job.groupBy) &&
+                    (job.agg === 'count' || (job.metric && columnNames.includes(job.metric))) &&
+                    ['sum', 'count', 'max', 'min'].includes(job.agg)
+                );
+            aiPlan.jobs = normalizedJobs;
+            __validJobsCount = normalizedJobs.length;
 
             console.log('[Debug] AI Generated Plan:', JSON.stringify(aiPlan, null, 2));
             
-            // Generate concrete workflow tasks based on the actual jobs that will be executed
-            const limitedJobs = aiPlan.jobs.slice(0, 8); // Limit to 8 charts
+            // Build additional Top-K Description filtered jobs (cross-tab → long) as reinforcement
+            let additionalJobs = [];
+            try {
+                const names = (context.profile?.columns || []).map(c => c.name);
+                const hasDesc = names.includes('Description');
+                const hasValue = names.includes('Value');
+                const hasPid = names.includes('ProjectId');
+
+                if (hasDesc) {
+                    // Prefer converted long rows for robust Top-K
+                    const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+                        ? window.AGG_ROWS
+                        : (Array.isArray(context.includedRows) ? context.includedRows : []);
+
+                    const numCols = (context.profile?.columns || []).filter(c => c.type === 'number').map(c => c.name);
+                    const metricName = hasValue ? 'Value' : (preferFinancialMetric(numCols) || numCols[0] || null);
+                    const groupByName = hasPid ? 'ProjectId' : ((context.profile?.columns || []).find(c => c.type === 'string')?.name || 'Description');
+
+                    if (metricName) {
+                        const sums = new Map();
+                        for (const r of rowsSource || []) {
+                            const d = (r && r.Description != null) ? String(r.Description).trim() : '';
+                            if (!d || /^total$/i.test(d)) continue;
+                            let v = Number(r?.[metricName]);
+                            if (!Number.isFinite(v)) {
+                                const parsed = parseFloat(String(r?.[metricName] ?? '').replace(/,/g, ''));
+                                v = Number.isFinite(parsed) ? parsed : NaN;
+                            }
+                            if (!Number.isFinite(v)) continue;
+                            sums.set(d, (sums.get(d) || 0) + v);
+                        }
+                        const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
+                        additionalJobs = topK.map(desc => ({
+                            groupBy: groupByName,
+                            metric: metricName,
+                            agg: 'sum',
+                            where: { Description: desc }
+                        }));
+                    }
+                }
+            } catch (e) {
+                console.warn('Top-K Description reinforcement failed:', e);
+            }
+
+            // Merge AI plan with auto plan and reinforcement, then cap by context.maxCharts
+            const fallbackPlan = autoPlan(context.profile, context.includedRows, context.excludedDimensions) || { jobs: [] };
+            const mergedJobs = deduplicateJobs([
+                ...(aiPlan.jobs || []),
+                ...((fallbackPlan.jobs || [])),
+                ...additionalJobs
+            ]);
+            const limit = Number(context.maxCharts) || 12;
+            const limitedJobs = mergedJobs.slice(0, limit);
+
+            // Expose pipeline stats for Workflow UI
+            try {
+                window.__AI_PLAN_STATS = {
+                    ai: __aiRawJobsCount,
+                    valid: __validJobsCount,
+                    auto: Array.isArray(fallbackPlan.jobs) ? fallbackPlan.jobs.length : 0,
+                    desc: additionalJobs.length,
+                    merged: mergedJobs.length,
+                    final: limitedJobs.length
+                };
+                if (window.WorkflowManager && typeof window.WorkflowManager.updateCurrentTaskMessage === 'function') {
+                    const s = window.__AI_PLAN_STATS;
+                    window.WorkflowManager.updateCurrentTaskMessage(
+                        `Jobs pipeline: AI ${s.ai} → valid ${s.valid} + auto ${s.auto} + desc ${s.desc} ⇒ merged ${s.merged}, limited ${s.final}`
+                    );
+                }
+            } catch (e) { console.warn('Failed to update AI plan stats:', e); }
+
             const workflowTasks = [];
             
             // Add chart generation tasks
             limitedJobs.forEach((job, index) => {
-                const chartType = job.agg === 'count' ? 'bar chart' : 
-                                job.agg === 'sum' || job.agg === 'avg' ? 'bar chart' : 'data table';
+                const chartType = job.agg === 'count'
+                    ? 'bar chart'
+                    : (job.agg === 'sum' || job.agg === 'avg' ? 'bar chart' : 'data table');
                 workflowTasks.push({
-                    description: `Building ${chartType}: ${job.agg}(${job.metric}) by ${job.groupBy}`,
+                    description: `Building ${chartType}: ${job.agg}(${job.metric ?? '*'}) by ${job.groupBy}`,
                     type: 'chart-generation',
                     jobIndex: index
                 });

@@ -336,6 +336,28 @@ export function updateAiTodoList(data) {
             </div>
         `;
     }
+
+    // Job pipeline stats (AI → valid → auto → desc → merged → final)
+    let jobStats = '';
+    try {
+        const s = window.__AI_PLAN_STATS;
+        if (s) {
+            jobStats = `
+            <div class="job-stats">
+                <div class="job-stats-title">📌 Job Pipeline</div>
+                <div class="job-stats-info">
+                    <span class="stat-item">AI: ${s.ai ?? 0}</span>
+                    <span class="stat-item">Valid: ${s.valid ?? 0}</span>
+                    <span class="stat-item">Auto: ${s.auto ?? 0}</span>
+                    <span class="stat-item">Desc: ${s.desc ?? 0}</span>
+                    <span class="stat-item">Merged: ${s.merged ?? 0}</span>
+                    <span class="stat-item"><strong>Final: ${s.final ?? 0}</strong></span>
+                </div>
+            </div>`;
+        }
+    } catch (e) {
+        // no-op
+    }
     
     if (status === 'completed') {
         const totalTime = tasks.length > 0 && tasks[0].timestamp ? 
@@ -346,7 +368,7 @@ export function updateAiTodoList(data) {
                 <span>Total time: ${totalTime}s</span>
                 <span>Tasks completed: ${completedTasks}/${tasks.length}</span>
             </div>
-            ${apiStats}
+            ${apiStats}${jobStats}
         `;
         container.appendChild(statusDiv);
         
@@ -379,7 +401,7 @@ export function updateAiTodoList(data) {
         const errorDetails = error?.message || 'Unknown error occurred';
         statusDiv.innerHTML = `
             <p style="color:var(--danger)"><strong>❌ Workflow failed:</strong> ${errorDetails}</p>
-            ${apiStats}
+            ${apiStats}${jobStats}
             <div class="error-actions">
                 <button class="retry-button primary" data-action="retry">Retry Analysis</button>
                 <button class="retry-button secondary" data-action="reset-restart">Reset & Restart</button>
@@ -472,7 +494,7 @@ export function updateAiTodoList(data) {
                         <div class="progress-percentage">${Math.round(((currentTaskIndex + 1) / state.tasks.length) * 100)}% complete</div>
                     </div>
                 </div>
-                ${apiStats}
+                ${apiStats}${jobStats}
                 <div class="action-buttons">
                     <button class="pause-button" data-action="pause">Pause Analysis</button>
                     <button class="cancel-button" data-action="cancel">Cancel Analysis</button>
@@ -506,7 +528,7 @@ export function updateAiTodoList(data) {
                 <div class="time-display">
                     <span class="elapsed-time">Elapsed: ${elapsedTime}</span>
                 </div>
-                ${apiStats}
+                ${apiStats}${jobStats}
                 <div class="action-buttons">
                     <button class="resume-button" data-action="resume">Resume Analysis</button>
                     <button class="cancel-button" data-action="cancel">Cancel Analysis</button>
@@ -874,9 +896,11 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
             } else if (window.MODE === 'ai_agent') {
                 const context = {
                     profile: activeProfile,
-                    includedRows: includedRows ? includedRows.slice(0, 5) : [], // Sample rows
+                    // Provide larger, more representative sample rows to the LLM
+                    includedRows: Array.isArray(includedRows) ? includedRows.slice(0, 200) : [],
                     excludedDimensions,
-                    maxCharts: 10
+                    // Allow a slightly larger cap by default; actual limit handled in helpers via context.maxCharts
+                    maxCharts: 12
                 };
                 
                 // ✅ IMMEDIATE UI FEEDBACK: Show AI Agent is starting before API call
@@ -954,9 +978,10 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
             } else {
                 const context = {
                     profile: activeProfile,
-                    includedRows: includedRows ? includedRows.slice(0, 5) : [], // Sample rows
+                    // Non-agent intelligent plan also benefits from a larger sample
+                    includedRows: Array.isArray(includedRows) ? includedRows.slice(0, 200) : [],
                     excludedDimensions,
-                    maxCharts: 10
+                    maxCharts: 12
                 };
                 
                 const dynamicPlan = await window.getAiAnalysisPlan(context);

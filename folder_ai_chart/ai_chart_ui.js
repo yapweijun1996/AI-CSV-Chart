@@ -843,8 +843,7 @@ function planFromManualRoles(profile){
     if (primary){
       jobs.push({ groupBy:d.name, metric:primary.name, agg:'sum' });
       charts.push({ useJob: jobs.length-1, preferredType:d.unique<=8?'pie':'bar', title:`${primary.name} by ${d.name}` });
-      jobs.push({ groupBy:d.name, metric:primary.name, agg:'avg' });
-      charts.push({ useJob: jobs.length-1, preferredType:'hbar', title:`avg ${primary.name} by ${d.name}` });
+      // 移除默认 avg 聚合，avg 在多数业务场景（金额/交易）意义不大，避免噪声建议。
     }
     // For ERP: Skip count, focus only on sum-based metrics
     if (!primary) {
