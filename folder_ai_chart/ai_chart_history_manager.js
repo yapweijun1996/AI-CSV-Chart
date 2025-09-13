@@ -128,11 +128,15 @@ function getChartsSnapshot() {
     const explanationEl = card.querySelector('.ai-explanation-content');
     const explanation = card.dataset.explanationMarkdown || (explanationEl ? explanationEl.innerHTML : null);
     const ds = card.dataset || {};
+    // Restore 'where' filter if it was present on the card (e.g., Description=Revenue)
+    let where = null;
+    try { where = ds.where ? JSON.parse(ds.where) : null; } catch { where = null; }
     const jobKey = {
       groupBy: ds.groupBy || '',
       metric: ds.metric || null,
       agg: ds.agg || 'sum',
-      dateBucket: ds.dateBucket || ''
+      dateBucket: ds.dateBucket || '',
+      ...(where ? { where } : {})
     };
     card.querySelectorAll('.chart-card').forEach(chartCard => {
       const type = chartCard.querySelector('select')?.value || 'auto';
@@ -141,6 +145,13 @@ function getChartsSnapshot() {
     });
     const filterInput = card.querySelector('.filter-input');
     const filterModeSelect = card.querySelector('.filter-mode-select');
+    // Persist per-card excluded keys (for Include column) if any
+    let excludedKeys = null;
+    try {
+      excludedKeys = ds.excludedKeys ? JSON.parse(ds.excludedKeys) : null;
+      if (!Array.isArray(excludedKeys)) excludedKeys = null;
+    } catch { excludedKeys = null; }
+
     charts.push({
       title: cardTitle,
       cardJobKey: jobKey,
@@ -148,7 +159,8 @@ function getChartsSnapshot() {
       filterValue: filterInput ? filterInput.value : 0,
       filterMode: filterModeSelect ? filterModeSelect.value : 'share',
       explanation,
-      showMissing: card.dataset.showMissing === 'true'
+      showMissing: card.dataset.showMissing === 'true',
+      ...(excludedKeys ? { excludedKeys } : {})
     });
   });
   return charts;
@@ -404,6 +416,48 @@ async function loadHistoryState(id) {
     G.DATA_COLUMNS = history.columns || [];
     G.LAST_PARSE_META = history.meta || {};
     G.PROFILE = _deps.profile ? _deps.profile(G.ROWS) : (window.profile ? window.profile(G.ROWS) : null);
+
+    // Ensure AGG_ROWS/AGG_PROFILE are initialized for history loads.
+    // Many saved cards expect canonical long schema (Value/Description/ProjectId).
+    // If dataset is already long → use it directly; else try cross-tab detection + convert.
+    try {
+      window.AGG_ROWS = null;
+      window.AGG_PROFILE = null;
+
+      const row0 = (Array.isArray(G.ROWS) && G.ROWS.length) ? G.ROWS[0] : null;
+      const looksLong = !!(row0 && Object.prototype.hasOwnProperty.call(row0, 'Value') && Object.prototype.hasOwnProperty.call(row0, 'Description'));
+
+      if (looksLong) {
+        console.debug('[HistoryFix] Detected long schema in history rows → using as AGG_ROWS');
+        window.AGG_ROWS = G.ROWS;
+        window.AGG_PROFILE = G.PROFILE;
+      } else {
+        try {
+          const mod = await import('./ai_chart_transformers.js');
+          const detect = (mod && typeof mod.detectCrossTab === 'function') ? mod.detectCrossTab : null;
+          const convert = (mod && typeof mod.convertCrossTabToLong === 'function') ? mod.convertCrossTabToLong : null;
+
+          if (detect && convert) {
+            const detection = detect(G.ROWS);
+            if (detection && (detection.isCrossTab || detection.type === 'cross-tab')) {
+              console.debug('[HistoryFix] Cross-tab detected on history load → converting to long');
+              const options = window.CROSSTAB_OPTIONS || {};
+              const { rows: longRows } = convert(G.ROWS, detection, options);
+              window.AGG_ROWS = longRows;
+              const dateFormatConv = document.getElementById('dateFormat')?.value || 'auto';
+              window.AGG_PROFILE = _deps.profile ? _deps.profile(longRows, dateFormatConv) : (window.profile ? window.profile(longRows, dateFormatConv) : null);
+            } else {
+              console.debug('[HistoryFix] Not cross-tab. Proceeding without AGG_ROWS.');
+            }
+          }
+        } catch (e2) {
+          console.warn('[HistoryFix] ai_chart_transformers dynamic import failed:', e2);
+        }
+      }
+    } catch (e1) {
+      console.warn('[HistoryFix] Failed to initialize AGG_ROWS/AGG_PROFILE for history:', e1);
+    }
+
     G.MODE = snapshot.mode || 'auto';
     G.MANUAL_ROLES = snapshot.manualRoles || {};
     G.MANUAL_JOBS = snapshot.manualJobs || [];

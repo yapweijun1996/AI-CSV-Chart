@@ -56,6 +56,39 @@ function columnType(colName, profile) {
 }
 
 /**
+ * Per-card exclusion helpers and view derivation
+ * - getExcludedKeysForCard(card): Set<string>
+ * - setExcludedKeysForCard(card, set): void
+ * - applyExclusionsToAgg(agg, card): shallow-cloned agg with rows filtered by excluded keys
+ */
+function getExcludedKeysForCard(cardEl) {
+  if (!cardEl) return new Set();
+  try {
+    const raw = cardEl.dataset.excludedKeys || '[]';
+    const arr = JSON.parse(raw);
+    return new Set((Array.isArray(arr) ? arr : []).map(x => String(x)));
+  } catch {
+    return new Set();
+  }
+}
+function setExcludedKeysForCard(cardEl, set) {
+  if (!cardEl) return;
+  try {
+    const arr = Array.from(set || []);
+    cardEl.dataset.excludedKeys = JSON.stringify(arr);
+  } catch {}
+}
+function applyExclusionsToAgg(agg, cardEl) {
+  try {
+    const excluded = getExcludedKeysForCard(cardEl);
+    const rows = (agg?.rows || []).filter(r => !excluded.has(String(r?.[0] ?? '')));
+    return { ...agg, rows };
+  } catch {
+    return agg;
+  }
+}
+
+/**
  * Select best metric column for count aggregations
  */
 function selectBestMetricColumn(numericCols) {
@@ -819,6 +852,8 @@ c.appendChild(editPanel);
 editBtn.onclick = () => {
   if (editPanel.style.display === 'none') {
     editPanel.style.display = 'block';
+    // Raise edit panel above chart canvas/popovers to avoid visual overlap
+    try { editPanel.style.zIndex = '2000'; editPanel.style.position = 'relative'; } catch (e) {}
     editBtn.textContent = 'Cancel Edit';
 
     // Sync Date Bucket visibility when opening + preset current settings
@@ -989,7 +1024,8 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
     const typeSelEl = cc.querySelector('select');
     const topNEl = cc.querySelector('input[type="number"]');
     if (canvas && typeSelEl && topNEl) {
-      const cfg = computeChartConfig(newAgg, typeSelEl.value, Number(topNEl.value) || 20, { noAnimation: true });
+      const visibleAfterEdit = applyExclusionsToAgg(newAgg, parentCardNow);
+      const cfg = computeChartConfig(visibleAfterEdit, typeSelEl.value, Number(topNEl.value) || 20, { noAnimation: true });
       ensureChart(canvas, cfg, true);
     }
   });
@@ -1002,7 +1038,20 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   const subEl = parentCard?.querySelector('.card-sub');
   if (subEl) subEl.textContent = `${newAgg.rows.length} groups · ${newAgg.header[1]}`;
   const titleEl = parentCard?.querySelector('.card-title');
-  if (titleEl) titleEl.textContent = `${newFunction}(${newMetric || '*'}) by ${newGroupBy}`;
+  // Preserve existing where label on title updates
+  try {
+    const parentWhere = parentCardNow?.dataset?.where ? JSON.parse(parentCardNow.dataset.where) : null;
+    const whereLabel = (function formatWhereLabelLocal(where) {
+      if (!where || typeof where !== 'object') return '';
+      try {
+        const parts = Object.entries(where).map(([k, v]) => Array.isArray(v) ? `${k} in [${v.join(', ')}]` : `${k}=${v}`);
+        return parts.join(' & ');
+      } catch { return ''; }
+    })(parentWhere);
+    if (titleEl) titleEl.textContent = `${newFunction}(${newMetric || '*'}) by ${newGroupBy}${whereLabel ? ' — ' + whereLabel : ''}`;
+  } catch {
+    if (titleEl) titleEl.textContent = `${newFunction}(${newMetric || '*'}) by ${newGroupBy}`;
+  }
 
   // Re-add missing-data warning
   parentCard?.querySelectorAll('.missing-data-warning').forEach(w => w.remove());
@@ -1060,7 +1109,9 @@ editPanel.querySelector('#edit-apply').onclick = async () => {
   
   function draw() {
     const topN = Number(topNInput.value) || 20;
-    const cfg = computeChartConfig(agg, typeSel.value, topN, { noAnimation });
+    const cardEl = c.closest('.card');
+    const visibleAgg = applyExclusionsToAgg(agg, cardEl);
+    const cfg = computeChartConfig(visibleAgg, typeSel.value, topN, { noAnimation });
     const isCircular = (cfg.type === 'pie' || cfg.type === 'doughnut' || cfg.type === 'polarArea' || cfg.type === 'radar');
 
     // Keep previously applied dims to detect changes
@@ -1129,13 +1180,20 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
 
   container.innerHTML = '';
   
+  // Card context + per-card excluded set helpers
+  const cardEl = container.closest('.card');
+  const getExcludedSet = () => getExcludedKeysForCard(cardEl);
+  const setExcludedSet = (set) => setExcludedKeysForCard(cardEl, set);
+
   // State variables for this table
   let currentPage = 1;
   let rowsPerPage = previewN;
   let searchQuery = '';
   let sortIdx = /\((day|week|month|quarter|year)\)/i.test(agg.header[0] || '') ? 0 : 1;
   let sortDir = sortIdx === 0 ? 'asc' : 'desc';
-  let filteredRows = [...agg.rows];
+  let filteredRows = [];
+  // Anchor the toggled key so pagination stays on the same row after include/exclude
+  let anchorKey = null;
   
   // Create table elements
   const tableControls = document.createElement('div');
@@ -1189,6 +1247,11 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
   
   // Create table header
   const trh = document.createElement('tr');
+  // Leading "Include" column (not sortable)
+  const thInc = document.createElement('th');
+  thInc.textContent = 'Include';
+  trh.appendChild(thInc);
+
   const headerSortSpans = [];
   agg.header.forEach((h, i) => {
     const th = document.createElement('th');
@@ -1224,7 +1287,11 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
   const dl = document.createElement('button');
   dl.textContent = 'Download CSV';
   dl.onclick = () => {
-    const csv = [agg.header, ...agg.rows].map(r => r.map(s => {
+    // Export current visible set (after exclusions + search filter), not just current page
+    const excluded = getExcludedSet();
+    const baseForExport = (filteredRows && filteredRows.length) ? filteredRows : (agg.rows || []);
+    const rowsToExport = baseForExport.filter(r => !excluded.has(String(r?.[0] ?? '')));
+    const csv = [agg.header, ...rowsToExport].map(r => r.map(s => {
       const z = String(s ?? '');
       return z.includes(',') || z.includes('"') ? `"${z.replace(/"/g, '""')}"` : z;
     }).join(',')).join('\n');
@@ -1268,15 +1335,20 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
   });
   
   function updateTable() {
-    // Filter rows
+    // Base rows and exclusion state
+    const excluded = getExcludedSet();
+    const baseRowsAll = (agg.rows || []);
+    const baseRowsIncluded = baseRowsAll.filter(row => !excluded.has(String(row?.[0] ?? '')));
+ 
+    // Filter rows (search) — keep excluded rows visible so user can re-check
     if (searchQuery) {
-      filteredRows = agg.rows.filter(row => 
+      filteredRows = baseRowsAll.filter(row =>
         row.some(cell => String(cell || '').toLowerCase().includes(searchQuery))
       );
     } else {
-      filteredRows = [...agg.rows];
+      filteredRows = [...baseRowsAll];
     }
-    
+     
     // Sort rows
     filteredRows.sort((a, b) => {
       const aVal = a[sortIdx];
@@ -1319,6 +1391,15 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
         span.textContent = '';
       }
     });
+
+    // Keep the toggled row on screen by recalculating the page containing it
+    if (anchorKey !== null) {
+      const idx = filteredRows.findIndex(r => String(r?.[0] ?? '') === anchorKey);
+      if (idx >= 0 && rowsPerPage > 0) {
+        currentPage = Math.floor(idx / rowsPerPage) + 1;
+      }
+      anchorKey = null;
+    }
     
     // Paginate
     const totalPages = Math.max(1, Math.ceil(filteredRows.length / Math.max(1, rowsPerPage)));
@@ -1332,6 +1413,56 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
     tbody.innerHTML = '';
     pageRows.forEach(row => {
       const tr = document.createElement('tr');
+
+      // Leading include checkbox cell
+      const key = String(row?.[0] ?? '');
+      const tdInc = document.createElement('td');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+
+      const isExcluded = getExcludedSet().has(key);
+      cb.checked = !isExcluded;
+
+      // Visual hint for excluded rows but keep them visible for re-check
+      tr.classList.toggle('row-excluded', isExcluded);
+      tr.style.opacity = isExcluded ? '0.6' : '';
+
+      cb.addEventListener('change', () => {
+        const set = getExcludedSet();
+        if (cb.checked) set.delete(key); else set.add(key);
+        setExcludedSet(set);
+
+        // Immediate visual feedback
+        const nowExcluded = !cb.checked;
+        tr.classList.toggle('row-excluded', nowExcluded);
+        tr.style.opacity = nowExcluded ? '0.6' : '';
+
+        // Redraw chart with exclusions applied
+        const canvas = cardEl?.querySelector('canvas');
+        const typeSelEl = cardEl?.querySelector('.chart-controls select');
+        const topNEl = cardEl?.querySelector('.chart-controls input[type="number"]');
+        if (canvas && typeSelEl && topNEl) {
+          const visibleAgg = applyExclusionsToAgg(agg, cardEl);
+          const cfg = computeChartConfig(visibleAgg, typeSelEl.value, Number(topNEl.value) || 20, { noAnimation: true });
+          ensureChart(canvas, cfg, true);
+        }
+
+        // Update card subtitle to reflect visible group count
+        const subEl = cardEl?.querySelector('.card-sub');
+        if (subEl) {
+          const visibleAggForSub = applyExclusionsToAgg(agg, cardEl);
+          subEl.textContent = `${visibleAggForSub.rows.length} groups · ${agg.header[1]}`;
+        }
+
+        // Keep pagination anchored on the toggled row
+        anchorKey = key;
+        updateTable();
+        window.debouncedAutoSave?.();
+      });
+      tdInc.appendChild(cb);
+      tr.appendChild(tdInc);
+
+      // Data cells
       row.forEach((cell, i) => {
         const td = document.createElement('td');
         if (i === 1 && typeof cell === 'number') {
@@ -1354,11 +1485,13 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
       };
       const fmt = (n) => (typeof n === 'number' ? fmtFull(n) : String(n ?? ''));
 
-      // 1) Σ visible (table filter): sum over filteredRows (after table search filter)
-      const visibleSum = filteredRows.reduce((a, r) => a + toNumber(r[metricColIdx]), 0);
+      // 1) Σ visible (table filter): sum over filteredRows AFTER exclusions (table search applied)
+      const visibleSum = filteredRows
+        .filter(r => !excluded.has(String(r?.[0] ?? '')))
+        .reduce((a, r) => a + toNumber(r[metricColIdx]), 0);
 
-      // 2) Σ table (post-minGroupShare): sum over agg.rows (after minGroupShare/value filter but before table search)
-      const postFilterSum = (agg.rows || []).reduce((a, r) => a + toNumber(r[metricColIdx]), 0);
+      // 2) Σ table (post-minGroupShare): sum over rows AFTER exclusions, BEFORE table search
+      const postFilterSum = (baseRowsIncluded || []).reduce((a, r) => a + toNumber(r[metricColIdx]), 0);
 
       // 3) Σ total (pre-filter): sum before minGroupShare/value filter (from groupAgg)
       const preFilterSum = Number.isFinite(agg.totalSum) ? agg.totalSum : postFilterSum;
@@ -1394,6 +1527,7 @@ export function renderAggTable(agg, container, previewN = 10, showMissing = fals
         const tdLabel = document.createElement('td');
         tdLabel.className = 'footer-label';
         tdLabel.textContent = label;
+        tdLabel.colSpan = 2; // Align with "Include" + group columns
         tr.appendChild(tdLabel);
 
         const tdValue = document.createElement('td');

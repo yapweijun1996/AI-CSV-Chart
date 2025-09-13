@@ -169,8 +169,18 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     card.dataset.dateBucket = job.dateBucket || '';
     card.dataset.showMissing = String(showMissing);
     card.dataset.canonicalKey = canonicalKey;
-    if (job.where) {
-      try { card.dataset.where = JSON.stringify(job.where); } catch {}
+    // Determine effective where from job or snapshot state
+    let __effectiveWhere = null;
+    try {
+      __effectiveWhere = job.where || (cardState && cardState.cardJobKey && cardState.cardJobKey.where) || (cardState && cardState.where) || null;
+    } catch {}
+    if (__effectiveWhere) {
+      job.where = job.where || __effectiveWhere;
+      try { card.dataset.where = JSON.stringify(__effectiveWhere); } catch {}
+    }
+    // Restore per-card row exclusion state from snapshot (for Include column in table)
+    if (Array.isArray(cardState.excludedKeys)) {
+      try { card.dataset.excludedKeys = JSON.stringify(cardState.excludedKeys); } catch {}
     }
     if (job.type === 'pivot') {
       card.dataset.pivot = 'true';
@@ -651,10 +661,46 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
             return;
         }
 
-        const newAgg = groupAgg(usedRows, currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
+        // Normalize share filter: if user/snapshot saved "20" (meaning 20%), convert to 0.20
+        let normalizedFilterValue = (currentFilterMode === 'share' && Number(currentFilterValue) > 1)
+          ? Number(currentFilterValue) / 100
+          : Number(currentFilterValue) || 0;
+
+        // Clamp to [0,1] for share mode
+        if (currentFilterMode === 'share') {
+          normalizedFilterValue = Math.max(0, Math.min(1, normalizedFilterValue));
+        }
+
+        console.debug('[HistoryFix] reRenderCard params', {
+          where: whereObj, usedRows: Array.isArray(usedRows) ? usedRows.length : -1,
+          currentGroupBy, currentMetric, currentAgg, currentDateBucket,
+          filterMode: currentFilterMode, filterValue: currentFilterValue, normalizedFilterValue
+        });
+
+        let newAgg = groupAgg(usedRows, currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
             mode: currentFilterMode,
-            value: currentFilterValue
+            value: normalizedFilterValue
         }, newShowMissing, PROFILE());
+
+        // Fallback 1: if filter removes all groups, relax to 0 and retry once (any mode)
+        if (Array.isArray(newAgg?.rows) && newAgg.rows.length === 0 && normalizedFilterValue > 0) {
+          console.warn('[Fallback] Empty result after filter =', normalizedFilterValue, 'mode=', currentFilterMode, '→ retry with 0');
+          normalizedFilterValue = 0;
+          try { const inp = card.querySelector('.filter-input'); if (inp) inp.value = '0'; } catch {}
+          newAgg = groupAgg(usedRows, currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
+            mode: currentFilterMode,
+            value: 0
+          }, newShowMissing, PROFILE());
+        }
+
+        // Fallback 2: if仍然为空，直接关闭最小份额/阈值过滤
+        if (Array.isArray(newAgg?.rows) && newAgg.rows.length === 0) {
+          console.warn('[Fallback-2] Still empty after reset, disabling minGroupShare/threshold for preview render');
+          newAgg = groupAgg(usedRows, currentGroupBy, currentMetric, currentAgg, currentDateBucket, {
+            mode: currentFilterMode,
+            value: 0
+          }, newShowMissing, PROFILE());
+        }
 
         card.dataset.showMissing = String(newShowMissing);
 
@@ -873,10 +919,46 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
       };
     } else {
       // Standard (non-pivot) aggregation path
+      // Normalize share filter from snapshot: if "20" (20%), convert to 0.20
+      let __normalizedFilterValue = (filterMode === 'share' && Number(filterValue) > 1)
+        ? Number(filterValue) / 100
+        : Number(filterValue) || 0;
+
+      // Clamp to [0,1] for share mode
+      if (filterMode === 'share') {
+        __normalizedFilterValue = Math.max(0, Math.min(1, __normalizedFilterValue));
+      }
+
+      console.debug('[HistoryFix] initial render params', {
+        where: job.where, usedRows: Array.isArray(usedRows) ? usedRows.length : -1,
+        groupBy: job.groupBy, metric: job.metric, agg: job.agg, dateBucket: job.dateBucket || '',
+        filterMode, filterValue, normalizedFilterValue: __normalizedFilterValue
+      });
+
       initialAgg = groupAgg(usedRows, job.groupBy, job.metric, job.agg, job.dateBucket || '', {
         mode: filterMode,
-        value: filterValue
+        value: __normalizedFilterValue
       }, showMissing, PROFILE());
+
+      // Fallback 1: if filter eliminates all groups, relax to 0 and retry once (any mode)
+      if (Array.isArray(initialAgg?.rows) && initialAgg.rows.length === 0 && __normalizedFilterValue > 0) {
+        console.warn('[Fallback] Empty initialAgg after filter =', __normalizedFilterValue, 'mode=', filterMode, '→ retry with 0');
+        __normalizedFilterValue = 0;
+        try { const inp = card.querySelector('.filter-input'); if (inp) inp.value = '0'; } catch {}
+        initialAgg = groupAgg(usedRows, job.groupBy, job.metric, job.agg, job.dateBucket || '', {
+          mode: filterMode,
+          value: 0
+        }, showMissing, PROFILE());
+      }
+
+      // Fallback 2: still empty → disable min share/threshold for preview
+      if (Array.isArray(initialAgg?.rows) && initialAgg.rows.length === 0) {
+        console.warn('[Fallback-2] Still empty after reset, disabling minGroupShare/threshold for preview render');
+        initialAgg = groupAgg(usedRows, job.groupBy, job.metric, job.agg, job.dateBucket || '', {
+          mode: filterMode,
+          value: 0
+        }, showMissing, PROFILE());
+      }
       console.timeEnd(`buildAggCard:compute:${card.dataset.canonicalKey}`);
 
       addMissingDataWarning(card, initialAgg, (typeof usedRows !== 'undefined' ? usedRows.length : aggregationRows().length), showMissing);
