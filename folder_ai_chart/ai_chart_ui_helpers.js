@@ -1424,6 +1424,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                         
                         if (result && window.currentAggregationSession === aggregationSessionId) {
                             grid.appendChild(result.card);
+            try { window.forceAutoSave && window.forceAutoSave('card-built', true); } catch {}
                             if (result.explanationTask) {
                                 explanationQueue.push(result.explanationTask);
                             }
@@ -1598,6 +1599,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                         
                         if (window.currentAggregationSession === aggregationSessionId) {
                             grid.appendChild(result.card);
+            try { window.forceAutoSave && window.forceAutoSave('card-built', true); } catch {}
                         }
                         
                         await new Promise(resolve => setTimeout(resolve, 50));
@@ -1747,6 +1749,7 @@ function initGlobalDescControls(containerEl = null) {
       const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
       if (res && res.card) {
         grid.appendChild(res.card);
+            try { window.forceAutoSave && window.forceAutoSave('card-built', true); } catch {}
         try {
           if (res.explanationTask) {
             await generateExplanation(res.explanationTask.agg, res.explanationTask.job, res.explanationTask.card);
@@ -1772,6 +1775,7 @@ function initGlobalDescControls(containerEl = null) {
         const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
         if (res && res.card) {
           grid.appendChild(res.card);
+            try { window.forceAutoSave && window.forceAutoSave('card-built', true); } catch {}
           if (res.explanationTask) {
             explanationTasks.push(res.explanationTask);
           } else if (res.initialAgg) {

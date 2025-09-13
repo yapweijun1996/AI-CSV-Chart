@@ -302,17 +302,18 @@ const debouncedAutoSave = debounce(() => {
   saveCurrentStateToHistory(currentName, false);
 }, 1500);
 
-function forceAutoSave(reason = 'manual-action') {
+function forceAutoSave(reason = 'manual-action', fullResave = false) {
   try {
     if (!window.currentHistoryId || !G.ROWS) return;
     const li = document.querySelector(`#history-list .history-item[data-id="${window.currentHistoryId}"] .name`);
     const currentName = li?.textContent || 'current report';
-    saveCurrentStateToHistory(currentName, false);
+    // When fullResave is true, re-save data chunks even if rows/headers haven't changed
+    saveCurrentStateToHistory(currentName, false, { forceResaveData: !!fullResave });
   } catch (e) { console.error('Force save failed:', e); }
 }
 
 // Save current state/report
-async function saveCurrentStateToHistory(fileName, forceNew = false) {
+async function saveCurrentStateToHistory(fileName, forceNew = false, options = {}) {
   if (!G.ROWS || !G.PROFILE) return;
   const toastId = `toast-${Date.now()}`;
   showToast('Saving report... 0%', 'info', 999999, toastId);
@@ -338,12 +339,14 @@ async function saveCurrentStateToHistory(fileName, forceNew = false) {
     if (isUpdating) {
       const existing = await _deps.Store.getHistory(id);
       const sameRows = existing && existing.rowCount === G.ROWS.length && existing.sig === signatureFromHeaders();
-      if (sameRows) {
+      const forceResave = options && options.forceResaveData === true;
+      if (sameRows && !forceResave) {
         await _deps.Store.updateHistory(id, { uiSnapshot: getUiSnapshot(), updatedAt: Date.now(), status: 'ready' });
         await renderHistorySidebar();
         showToast('Report updated (UI settings saved).', 'success', 3000, toastId);
         return;
       }
+      // If forceResave is true, fall through to chunk-save the full data again
     }
     try {
       const chunkSize = 5000;
