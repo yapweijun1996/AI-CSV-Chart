@@ -17,27 +17,31 @@ function columnType(name){
   return c ? c.type : 'string'; 
 }
 
-// Detect rows that are likely subtotals, grand totals, or non-data rows
+/**
+ * Detect rows that are likely subtotals, grand totals, or non-data rows
+ * Smart but conservative: prefer numeric-heavy + total-like tokens
+ */
 function isLikelyNonDataRow(row, index) {
   if (!row) return { result: true, reason: 'Row is empty' };
 
   const values = Object.values(row).map(v => String(v || '').trim());
   const lowerValues = values.map(v => v.toLowerCase());
-  const allText = lowerValues.join(' ');
+  const allText = lowerValues.join(' ').replace(/\s+/g, ' ').trim();
 
-  // Rule 1: Explicit total keywords (enhanced to catch "Grand Total (SGD)")
+  // Rule 1: Explicit total/subtotal keywords and common variants (incl. currencies/paren)
   const totalPatterns = [
-    /\b(grand\s+)?(sub)?total\b/i,
-    /\bgrand\s+total\s*\(.+\)/i, // Catches "Grand Total (SGD)"
-    /\bsum\b/i,
-    /\btotal\s*(amount|qty|quantity|value|cost|price)\b/i,
-    /\b(overall|final|net)\s+total\b/i,
-    /^\s*(total|subtotal|sum)\s*:?\s*$/i
+    /\b(grand\s+)?(sub)?total(s)?\b/i,
+    /\bgrand\s+total\s*\([^)]+\)/i, // e.g., "Grand Total (SGD)"
+    /\b(net|overall|final|gross)\s+total(s)?\b/i,
+    /\btotal\s+(amount|qty|quantity|value|cost|price|revenue|expense|expenses|sales)\b/i,
+    /^\s*(total|subtotal|sum)\s*[:\-]\s*[\d,.\s]+\b/i, // "Total: 1,234"
+    /\b(total|subtotal|sum)\s*\([^)]+\)/i,             // "Total (SGD)"
+    /^\s*\(\s*[A-Za-z]{2,4}\s*\)\s*total(s)?\b/i,      // "(SGD) Total"
+    /(合计|小计|总计|總計|合計|小計|总數|總數)/i        // Chinese variants
   ];
-  const hasTotal = totalPatterns.some(pattern => pattern.test(allText));
-  if (hasTotal) {
-    const matchedValue = values.find(v => totalPatterns.some(p => p.test(v))) || 'total keyword';
-    return { result: true, reason: `Contains total keyword: "${matchedValue}"` };
+  let matchedTotalValue = null;
+  for (const v of values) {
+    if (totalPatterns.some(p => p.test(String(v)))) { matchedTotalValue = v; break; }
   }
 
   // Access global variables from main ui
@@ -46,57 +50,90 @@ function isLikelyNonDataRow(row, index) {
   const DATA_COLUMNS = window.DATA_COLUMNS || [];
 
   // Rule 2: Currency-only subtotal rows
-  const currencyPatterns = new RegExp(`^(${CURRENCY_TOKENS.join('|')})$`, 'i');
-  const metricPatterns = /^(price|amount|total|cost|value|sum|subtotal|qty|quantity)$/i;
+  const safeJoin = (arr) => arr.map(x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const currencyPatterns = (CURRENCY_TOKENS && CURRENCY_TOKENS.length)
+    ? new RegExp(`^(${safeJoin(CURRENCY_TOKENS)})$`, 'i')
+    : null;
+  const metricPatterns = /^(price|amount|total|cost|value|sum|subtotal|qty|quantity|revenue|sales)$/i;
 
   let currencyCount = 0;
   let metricCount = 0;
   let numberCount = 0;
   let meaningfulTextCount = 0;
+  let nonEmptyCount = 0;
   let currencyInfo = null;
+  let firstNonEmptyIndex = -1;
+  let firstNonEmptyValue = '';
 
   values.forEach((val, i) => {
-    const lowerVal = lowerValues[i];
-    if (!lowerVal) return;
+    const s = String(val || '').trim();
+    const lowerVal = s.toLowerCase();
+    if (!s) return;
+    nonEmptyCount++;
+    if (firstNonEmptyIndex === -1) { firstNonEmptyIndex = i; firstNonEmptyValue = s; }
 
-    if (currencyPatterns.test(lowerVal)) {
+    if (currencyPatterns && currencyPatterns.test(s)) {
       currencyCount++;
       if (!currencyInfo) {
         const colName = DATA_COLUMNS[i] || '';
         currencyInfo = {
-          token: val,
+          token: s,
           colIndex: i,
-          colName: colName,
+          colName,
           isCurrencyHintColumn: CURRENCY_COLUMN_HINTS.some(hint => colName.toLowerCase().includes(hint)),
           isTrailingColumn: i >= (values.length - 3)
         };
       }
     } else if (metricPatterns.test(lowerVal)) {
       metricCount++;
-    } else if (isNum(val) && val !== '0') {
-      numberCount++;
-    } else if (val.length > 3) { // A bit more strict on "meaningful"
-      meaningfulTextCount++;
+    } else {
+      const n = toNum(s.replace(/\s+/g, ''));
+      if (Number.isFinite(n) && String(n) !== '0') {
+        numberCount++;
+      } else if (s.length > 3) {
+        meaningfulTextCount++;
+      }
     }
   });
 
-  // Condition for currency-only subtotal
-  const isCurrencySubtotal = currencyCount === 1 &&
-                             numberCount >= 1 &&
-                             meaningfulTextCount === 0 &&
-                             currencyInfo && (currencyInfo.isCurrencyHintColumn || currencyInfo.isTrailingColumn);
+  const isCurrencySubtotal = currencyInfo
+    && currencyCount === 1
+    && numberCount >= 1
+    && meaningfulTextCount === 0
+    && (currencyInfo.isCurrencyHintColumn || currencyInfo.isTrailingColumn);
 
   if (isCurrencySubtotal) {
     return { result: true, reason: `Currency subtotal (CCY='${currencyInfo.token}')` };
   }
 
   // Keep original checks for separators and mostly empty rows as fallbacks
-  const hasAllCapsTotal = values.some(v => /^[A-Z\s]{3,}(TOTAL|SUM|SUBTOTAL)[A-Z\s]*$/.test(v));
-  const isSeparator = values.some(v => /^[-=_]{3,}$/.test(v));
+  const hasAllCapsTotal = values.some(v => /^[A-Z\s]{3,}(TOTAL|SUM|SUBTOTAL)[A-Z\s]*$/.test(String(v || '')));
+  const isSeparator = values.some(v => /^[-=_]{3,}$/.test(String(v || '')));
 
   if (hasAllCapsTotal) return { result: true, reason: 'Contains ALL CAPS total keywords' };
   if (isSeparator) return { result: true, reason: 'Appears to be a separator row' };
-  
+
+  // Heuristic A: first cell looks like total + numeric heavy row
+  const firstIsTotalish = (() => {
+    const s = String(firstNonEmptyValue || '').toLowerCase();
+    if (!s) return false;
+    if (/\b(grand\s+)?(sub)?total(s)?\b/.test(s)) return true;
+    if (/^(合计|小计|总计|總計|合計|小計|总數|總數)/.test(s)) return true;
+    if (/^\s*\(\s*[A-Za-z]{2,4}\s*\)\s*total(s)?\b/.test(s)) return true;
+    if (/^(total|subtotal|sum)\s*[:\-]/.test(s)) return true;
+    return false;
+  })();
+
+  const numericRatio = numberCount / Math.max(1, nonEmptyCount);
+  if (firstIsTotalish && numberCount >= 1 && numericRatio >= 0.5) {
+    return { result: true, reason: `First cell total-like + ${numberCount} numeric cells` };
+  }
+
+  // Heuristic B: any total keyword present AND numeric heavy row
+  if (matchedTotalValue && numberCount >= 1 && numericRatio >= 0.5) {
+    return { result: true, reason: `Contains total keyword: "${matchedTotalValue}"` };
+  }
+
   return { result: false, reason: '' };
 }
 

@@ -546,6 +546,19 @@ async function loadHistoryState(id) {
     if (_deps.applyFilter) _deps.applyFilter();
     if (_deps.renderRawBody) _deps.renderRawBody();
     try { _deps.updateGlobalDescControls && _deps.updateGlobalDescControls(); } catch (e) { console.warn('[History] updateGlobalDescControls after table render failed:', e); }
+
+    // Defensive: ensure row inclusion is initialized when not present in snapshot
+    try {
+      const hasSnapshotInclusion = Array.isArray(snapshot.rowInclusion);
+      const needsInit = !Array.isArray(window.ROW_INCLUDED) || (Array.isArray(G.ROWS) && window.ROW_INCLUDED.length !== G.ROWS.length);
+      if (!hasSnapshotInclusion && needsInit && typeof _deps.initializeRowInclusion === 'function') {
+        _deps.initializeRowInclusion();
+        // Re-render raw body to reflect updated checkbox states and tfoot sums
+        if (typeof _deps.renderRawBody === 'function') _deps.renderRawBody();
+      }
+    } catch (e) {
+      console.warn('[History] Defensive initializeRowInclusion failed:', e);
+    }
     const restoreSessionId = `restore_${Date.now()}`;
     const grid = $('#results'); if (grid) grid.innerHTML = '';
     const snapshotCharts = snapshot.charts;

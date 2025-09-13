@@ -62,27 +62,16 @@ function formatWhereLabel(where) {
 }
 
 /**
-* Sanitize raw rows for aggregation:
-* - Drop footer/summary rows like "Grand Total" etc.
+* Sanitize raw rows for aggregation (no-op to honor "exclude, don't remove"):
+* - Return rows unchanged so totals still appear in aggregates, but we can auto-uncheck them.
 */
 function sanitizeRows(rows) {
- try {
-   if (!Array.isArray(rows)) return [];
-   const isFooterLike = (r) => {
-     for (const k in r) {
-       const v = r[k];
-       if (typeof v === 'string') {
-         const s = v.trim().toLowerCase();
-         if (s.startsWith('grand total') || s === 'grand total') return true;
-       }
-     }
-     return false;
-   };
-   return rows.filter(r => !isFooterLike(r));
- } catch (e) {
-   console.warn('sanitizeRows failed:', e);
-   return Array.isArray(rows) ? rows : [];
- }
+  try {
+    return Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    console.warn('sanitizeRows failed:', e);
+    return Array.isArray(rows) ? rows : [];
+  }
 }
 
 /**
@@ -591,8 +580,29 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
         addMissingDataWarning(card, newAgg, (typeof usedRows !== 'undefined' ? usedRows.length : aggregationRows().length), newShowMissing);
 
         sub.textContent = `${newAgg.rows.length} groups · ${newAgg.header[1]}`;
+        
+        // Auto-uncheck obvious total-like groups (do not remove; only pre-populate excluded set)
+        try {
+          const patExactTotal = /^\s*(?:\(\s*[A-Za-z]{2,4}\s*\)\s*)?(?:grand\s+)?(?:sub\s*)?total\s*$/i; // "Total", "Grand Total", "(SGD) Total"
+          const patExactSum   = /^\s*sum\s*$/i;
+          const patNetTotal   = /^\s*net\s*total\s*$/i;
+          const patCN         = /^(合计|小计|总计|總計|合計|小計)\s*$/;
+        
+          let existing = [];
+          try { existing = card.dataset.excludedKeys ? JSON.parse(card.dataset.excludedKeys) : []; } catch {}
+          const set = new Set(Array.isArray(existing) ? existing.map(x => String(x)) : []);
+        
+          for (const r of (newAgg.rows || [])) {
+            const key = String(r?.[0] ?? '').trim();
+            if (patExactTotal.test(key) || patExactSum.test(key) || patNetTotal.test(key) || patCN.test(key)) {
+              set.add(key);
+            }
+          }
+          card.dataset.excludedKeys = JSON.stringify(Array.from(set));
+        } catch (e) { console.warn('auto-uncheck totals (reRender) failed:', e); }
+        
         renderAggTable(newAgg, tableBox, 20, newShowMissing, { formatNumberFull });
-
+        
         chartsContainer.querySelectorAll('.chart-card').forEach(chartCard => {
             const canvas = chartCard.querySelector('canvas');
             const typeSel = chartCard.querySelector('select');
@@ -845,7 +855,27 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
 
       addMissingDataWarning(card, initialAgg, (typeof usedRows !== 'undefined' ? usedRows.length : aggregationRows().length), showMissing);
       sub.textContent = `${initialAgg.rows.length} groups · ${initialAgg.header[1]}`;
-
+      
+      // Auto-uncheck obvious total-like groups on first render (do not remove; only pre-populate excluded set)
+      try {
+        const patExactTotal = /^\s*(?:\(\s*[A-Za-z]{2,4}\s*\)\s*)?(?:grand\s+)?(?:sub\s*)?total\s*$/i;
+        const patExactSum   = /^\s*sum\s*$/i;
+        const patNetTotal   = /^\s*net\s*total\s*$/i;
+        const patCN         = /^(合计|小计|总计|總計|合計|小計)\s*$/;
+      
+        let existing = [];
+        try { existing = card.dataset.excludedKeys ? JSON.parse(card.dataset.excludedKeys) : []; } catch {}
+        const set = new Set(Array.isArray(existing) ? existing.map(x => String(x)) : []);
+      
+        for (const r of (initialAgg.rows || [])) {
+          const key = String(r?.[0] ?? '').trim();
+          if (patExactTotal.test(key) || patExactSum.test(key) || patNetTotal.test(key) || patCN.test(key)) {
+            set.add(key);
+          }
+        }
+        card.dataset.excludedKeys = JSON.stringify(Array.from(set));
+      } catch (e) { console.warn('auto-uncheck totals (initial) failed:', e); }
+      
       console.time(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
       renderAggTable(initialAgg, tableBox, 20, showMissing, { formatNumberFull });
       console.timeEnd(`buildAggCard:renderTable:${card.dataset.canonicalKey}`);
