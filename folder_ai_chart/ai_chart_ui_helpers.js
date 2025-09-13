@@ -473,6 +473,11 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
                   card.dataset.pivotOrientation = orientation;
                   const cfg = computePivotChartConfig(pvt, orientation);
                   ensureChart(canvas, cfg, !!resize);
+                  // Reflow grid after pivot chart resize
+                  try {
+                    requestAnimationFrame(() => { try { applyMasonryLayout(); } catch {} });
+                    setTimeout(() => { try { applyMasonryLayout(); } catch {} }, 650);
+                  } catch {}
                 };
 
                 orientationSel.addEventListener('change', () => { draw(true); debouncedAutoSave(); });
@@ -746,6 +751,11 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
             card.dataset.pivotOrientation = orientation;
             const cfg = computePivotChartConfig(pvt, orientation);
             ensureChart(canvas, cfg, !!resize);
+            // Reflow grid after pivot chart resize
+            try {
+              requestAnimationFrame(() => { try { applyMasonryLayout(); } catch {} });
+              setTimeout(() => { try { applyMasonryLayout(); } catch {} }, 650);
+            } catch {}
           };
 
           orientationSel.addEventListener('change', () => { draw(true); debouncedAutoSave(); });
@@ -1527,6 +1537,14 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                         
                         if (result && window.currentAggregationSession === aggregationSessionId) {
                             grid.appendChild(result.card);
+                            // Reflow Masonry immediately after a new card is appended
+                            try {
+                              requestAnimationFrame(() => {
+                                requestAnimationFrame(() => {
+                                  try { applyMasonryLayout(); } catch {}
+                                });
+                              });
+                            } catch {}
             try { window.forceAutoSave && window.forceAutoSave('card-built', true); } catch {}
                             if (result.explanationTask) {
                                 explanationQueue.push(result.explanationTask);
