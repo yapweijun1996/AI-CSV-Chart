@@ -23,7 +23,7 @@ import { showToast } from './ai_chart_toast_system.js';
 import { initializeChat, refreshChatUI } from './ai_chart_chat.js';
 import { AITaskManager, createWorkflowManager } from './ai_chart_task_manager.js';
 import { initWorkflowUI, runAiWorkflow, generateExplanation, checkAndGenerateAISummary, renderExplanationCard } from './ai_chart_ui_workflow.js';
-import { buildAggCard, getAiAnalysisPlan, getIntelligentAiAnalysisPlan, renderAggregates, setGenerateButtonState } from './ai_chart_ui_helpers.js';
+import { buildAggCard, getAiAnalysisPlan, getIntelligentAiAnalysisPlan, renderAggregates, setGenerateButtonState, initGlobalDescControls, updateGlobalDescControls } from './ai_chart_ui_helpers.js';
 import { detectCrossTab, convertCrossTabToLong } from './ai_chart_transformers.js';
 // Moved raw data table implementation to separate module
 import {
@@ -1074,6 +1074,8 @@ $('#loadBtn').onclick = async ()=>{
     SORT = { col:null, dir:'asc' }; window.SORT = SORT;
     RPP = Number($('#rowsPerPage').value)||25; PAGE=1; window.RPP = RPP; window.PAGE = PAGE;
     applyFilter(); renderRawBody();
+    // Refresh global Description controls after new CSV has been loaded
+    try { updateGlobalDescControls(); } catch (e) { console.warn('updateGlobalDescControls (manual load) failed:', e); }
     MANUAL_ROLES = {}; MANUAL_JOBS = [];
     const smart = getDefaultMode();
     $('#mode').value = smart;
@@ -1346,12 +1348,21 @@ document.addEventListener('DOMContentLoaded', () => {
         isValidApiKey,
         initializeRowInclusion,
         buildAggCard,
-        updateAiTodoList
+        updateAiTodoList,
+        updateGlobalDescControls
     });
 
     initializeAiSettingsHandlers({ $, showToast });
     initializeSectionToggles();
     updateAIFeaturesVisibility();
+
+    // Initialize global Description filter controls in CSV Input section
+    try {
+      const gdc = document.getElementById('global-desc-filter-controls');
+      if (gdc && typeof initGlobalDescControls === 'function') {
+        initGlobalDescControls(gdc);
+      }
+    } catch (e) { console.warn('initGlobalDescControls init failed:', e); }
     
     // Initialize workflow UI with dependencies
     initWorkflowUI({
@@ -1585,6 +1596,8 @@ window.addEventListener('message', async (event) => {
         // Apply filter and render the raw data table
         applyFilter();
         renderRawBody();
+        // Refresh global Description controls after table stream load (pre-conversion)
+        try { updateGlobalDescControls(); } catch (e) { console.warn('updateGlobalDescControls (table stream pre-conv) failed:', e); }
 
         // Detect cross-tab and convert to long for aggregation (table_csv path)
         try {
@@ -1621,6 +1634,8 @@ window.addEventListener('message', async (event) => {
           hideConvertedSection();
         }
 
+        // Refresh global Description controls after cross-tab conversion decision
+        try { updateGlobalDescControls(); } catch (e) { console.warn('updateGlobalDescControls (table stream post-conv) failed:', e); }
         console.log('✅ Raw Data table rendered');
         
         // Reset manual overrides (same as loadBtn)

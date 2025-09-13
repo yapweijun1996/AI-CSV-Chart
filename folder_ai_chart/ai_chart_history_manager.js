@@ -431,6 +431,7 @@ async function loadHistoryState(id) {
         console.debug('[HistoryFix] Detected long schema in history rows → using as AGG_ROWS');
         window.AGG_ROWS = G.ROWS;
         window.AGG_PROFILE = G.PROFILE;
+        try { _deps.updateGlobalDescControls && _deps.updateGlobalDescControls(); } catch (e) { console.warn('[History] updateGlobalDescControls (looksLong) failed:', e); }
       } else {
         try {
           const mod = await import('./ai_chart_transformers.js');
@@ -446,6 +447,7 @@ async function loadHistoryState(id) {
               window.AGG_ROWS = longRows;
               const dateFormatConv = document.getElementById('dateFormat')?.value || 'auto';
               window.AGG_PROFILE = _deps.profile ? _deps.profile(longRows, dateFormatConv) : (window.profile ? window.profile(longRows, dateFormatConv) : null);
+              try { _deps.updateGlobalDescControls && _deps.updateGlobalDescControls(); } catch (e) { console.warn('[History] updateGlobalDescControls (converted long) failed:', e); }
             } else {
               console.debug('[HistoryFix] Not cross-tab. Proceeding without AGG_ROWS.');
             }
@@ -543,6 +545,7 @@ async function loadHistoryState(id) {
     if (_deps.buildRawHeader) _deps.buildRawHeader(G.DATA_COLUMNS);
     if (_deps.applyFilter) _deps.applyFilter();
     if (_deps.renderRawBody) _deps.renderRawBody();
+    try { _deps.updateGlobalDescControls && _deps.updateGlobalDescControls(); } catch (e) { console.warn('[History] updateGlobalDescControls after table render failed:', e); }
     const restoreSessionId = `restore_${Date.now()}`;
     const grid = $('#results'); if (grid) grid.innerHTML = '';
     const snapshotCharts = snapshot.charts;

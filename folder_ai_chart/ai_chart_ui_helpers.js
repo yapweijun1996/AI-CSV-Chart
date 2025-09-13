@@ -342,126 +342,8 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
       };
     }
 
-    // Manual card generation: Filtered card by Description (friendly add)
-    try {
-      const prof2 = PROFILE?.() || window.AGG_PROFILE || window.PROFILE || {};
-      const hasDesc = Array.isArray(prof2.columns) && prof2.columns.some(c => c.name === 'Description');
-      if (hasDesc) {
-        const baseRows = (window.AGG_ROWS && Array.isArray(window.AGG_ROWS) ? window.AGG_ROWS : aggregationRows());
-        const sums = new Map();
-        const set = new Set();
-        for (const r of baseRows) {
-          const d = (r && r.Description != null) ? String(r.Description).trim() : '';
-          if (!d || /^total$/i.test(d)) continue;
-          set.add(d);
-          let v = Number(r?.Value);
-          if (!Number.isFinite(v)) {
-            const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
-            v = Number.isFinite(parsed) ? parsed : 0;
-          }
-          sums.set(d, (sums.get(d) || 0) + v);
-        }
-        const descValues = Array.from(set.values()).sort((a,b)=> (sums.get(b)||0) - (sums.get(a)||0)).slice(0, 200);
-
-        const descWrap = document.createElement('div');
-        descWrap.className = 'desc-filter-controls';
-        descWrap.style.display = 'flex';
-        descWrap.style.flexWrap = 'wrap';
-        descWrap.style.gap = '8px';
-        descWrap.style.alignItems = 'center';
-        descWrap.style.margin = '6px 0';
-
-        descWrap.innerHTML = `
-          <label>Filter by Description:
-            <select class="desc-select" style="min-width:220px">
-              <option value="">— choose —</option>
-              ${descValues.map(v => `<option value="${v}">${v}</option>`).join('')}
-            </select>
-          </label>
-          <button class="desc-add btn-secondary">Add Filtered Card</button>
-          <button class="desc-gen btn-secondary" title="Generate Top 10 Description cards">Generate Top 10</button>
-        `;
-        controls.appendChild(descWrap);
-
-        // Helper to build a filtered aggregate job
-        const buildFilteredJob = (desc) => {
-          const names = (prof2.columns || []).map(c => c.name);
-          const groupBy = names.includes('ProjectId')
-            ? 'ProjectId'
-            : ((prof2.columns || []).find(c => c.type === 'string')?.name || 'Description');
-          const metric = names.includes('Value')
-            ? 'Value'
-            : ((prof2.columns || []).find(c => c.type === 'number')?.name || '');
-          return { groupBy, metric, agg: metric ? 'sum' : 'count', where: { Description: desc } };
-        };
-
-        descWrap.querySelector('.desc-add').onclick = async () => {
-          const val = descWrap.querySelector('.desc-select').value;
-          if (!val) { showToast('Select a Description first.', 'warning'); return; }
-          const job2 = buildFilteredJob(val);
-          const grid = document.querySelector('#results');
-          const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
-          if (res && res.card) {
-            grid.appendChild(res.card);
-
-            // Generate AI explanation for the newly added manual card (parity with auto cards)
-            try {
-              if (res.explanationTask) {
-                await generateExplanation(res.explanationTask.agg, res.explanationTask.job, res.explanationTask.card);
-              } else if (res.initialAgg) {
-                await generateExplanation(res.initialAgg, job2, res.card);
-              }
-            } catch (e) {
-              console.warn('Manual desc-add explanation generation failed:', e);
-            }
-
-            // Ensure AI Summary includes this new card
-            try { checkAndGenerateAISummary(); } catch {}
-
-            applyMasonryLayout();
-            debouncedAutoSave();
-            showToast(`Added filtered card for Description=${val}`, 'success');
-          }
-        };
-
-        descWrap.querySelector('.desc-gen').onclick = async () => {
-          const topList = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0, 10).map(([k])=>k);
-          const grid = document.querySelector('#results');
-          const explanationTasks = [];
-
-          for (const label of topList) {
-            const job2 = buildFilteredJob(label);
-            const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
-            if (res && res.card) {
-              grid.appendChild(res.card);
-              if (res.explanationTask) {
-                explanationTasks.push(res.explanationTask);
-              } else if (res.initialAgg) {
-                explanationTasks.push({ agg: res.initialAgg, job: job2, card: res.card });
-              }
-            }
-          }
-
-          // Generate explanations sequentially for the batch-created cards
-          try {
-            for (const task of explanationTasks) {
-              await generateExplanation(task.agg, task.job, task.card);
-            }
-          } catch (e) {
-            console.warn('Manual desc-gen explanation generation failed:', e);
-          }
-
-          // Update AI Summary after batch generation to include new cards
-          try { checkAndGenerateAISummary(); } catch {}
-
-          applyMasonryLayout();
-          debouncedAutoSave();
-          showToast('Generated top 10 Description filtered cards.', 'success');
-        };
-      }
-    } catch (e) {
-      console.warn('Manual Description controls setup failed:', e);
-    }
+    // Manual Description controls moved to global CSV Input section (initGlobalDescControls).
+    // No per-card controls here to avoid duplication and UX clutter.
 
     const chartsContainer = document.createElement('div');
     chartsContainer.className = 'chart-cards';
@@ -1454,6 +1336,7 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
 
     try {
         const includedRows = (window.AGG_ROWS && Array.isArray(window.AGG_ROWS)) ? window.AGG_ROWS : getIncludedRows();
+        try { updateGlobalDescControls(); } catch {}
         if (includedRows.length === 0) {
             showToast('No rows selected for aggregation. Please check some rows in the Raw Data table.', 'warning');
             return;
@@ -1755,11 +1638,176 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
     }
 }
 
+// Global Description filter utilities for CSV Input section
+function computeDescValues() {
+  try {
+    const prof2 = PROFILE?.() || window.AGG_PROFILE || window.PROFILE || {};
+    const hasDesc = Array.isArray(prof2.columns) && prof2.columns.some(c => c.name === 'Description');
+    if (!hasDesc) return { descValues: [], sums: new Map(), hasDesc: false, profile: prof2 };
+
+    const baseRows = (window.AGG_ROWS && Array.isArray(window.AGG_ROWS)) ? window.AGG_ROWS : aggregationRows();
+    const sums = new Map();
+    const set = new Set();
+    for (const r of baseRows) {
+      const d = (r && r.Description != null) ? String(r.Description).trim() : '';
+      if (!d || /^total$/i.test(d)) continue;
+      set.add(d);
+      let v = Number(r?.Value);
+      if (!Number.isFinite(v)) {
+        const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
+        v = Number.isFinite(parsed) ? parsed : 0;
+      }
+      sums.set(d, (sums.get(d) || 0) + v);
+    }
+    const descValues = Array.from(set.values())
+      .sort((a, b) => (sums.get(b) || 0) - (sums.get(a) || 0))
+      .slice(0, 200);
+    return { descValues, sums, hasDesc: true, profile: prof2 };
+  } catch (e) {
+    console.warn('computeDescValues failed:', e);
+    return { descValues: [], sums: new Map(), hasDesc: false, profile: {} };
+  }
+}
+
+function initGlobalDescControls(containerEl = null) {
+  try {
+    const container = containerEl || document.getElementById('global-desc-filter-controls');
+    const bar = document.getElementById('global-desc-filter-bar') || (container && container.closest('#global-desc-filter-bar')) || null;
+    if (!container) return false;
+
+    const { descValues, sums, hasDesc, profile: prof2 } = computeDescValues();
+    if (!hasDesc || descValues.length === 0) {
+      if (bar) bar.style.display = 'none';
+      container.innerHTML = '';
+      return false;
+    }
+
+    if (bar) bar.style.display = '';
+    container.innerHTML = `
+      <label>Filter by Description:
+        <select class="desc-select" style="min-width:220px">
+          <option value="">— choose —</option>
+          ${descValues.map(v => `<option value="${v}">${v}</option>`).join('')}
+        </select>
+      </label>
+      <button class="desc-add btn-secondary">Add Filtered Card</button>
+      <button class="desc-gen btn-secondary" title="Generate Top 10 Description cards">Generate Top 10</button>
+    `;
+
+    const buildFilteredJob = (desc) => {
+      const names = (prof2.columns || []).map(c => c.name);
+      const groupBy = names.includes('ProjectId')
+        ? 'ProjectId'
+        : ((prof2.columns || []).find(c => c.type === 'string')?.name || 'Description');
+      const metric = names.includes('Value')
+        ? 'Value'
+        : ((prof2.columns || []).find(c => c.type === 'number')?.name || '');
+      return { groupBy, metric, agg: metric ? 'sum' : 'count', where: { Description: desc } };
+    };
+
+    const selectEl = container.querySelector('.desc-select');
+    const addBtn = container.querySelector('.desc-add');
+    const genBtn = container.querySelector('.desc-gen');
+
+    addBtn.onclick = async () => {
+      const val = selectEl.value;
+      if (!val) { showToast('Select a Description first.', 'warning'); return; }
+      const job2 = buildFilteredJob(val);
+      const grid = document.querySelector('#results');
+      const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
+      if (res && res.card) {
+        grid.appendChild(res.card);
+        try {
+          if (res.explanationTask) {
+            await generateExplanation(res.explanationTask.agg, res.explanationTask.job, res.explanationTask.card);
+          } else if (res.initialAgg) {
+            await generateExplanation(res.initialAgg, job2, res.card);
+          }
+        } catch (e) {
+          console.warn('Global desc-add explanation generation failed:', e);
+        }
+        try { checkAndGenerateAISummary(); } catch {}
+        applyMasonryLayout();
+        debouncedAutoSave();
+        showToast(`Added filtered card for Description=${val}`, 'success');
+      }
+    };
+
+    genBtn.onclick = async () => {
+      const topList = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0, 10).map(([k])=>k);
+      const grid = document.querySelector('#results');
+      const explanationTasks = [];
+      for (const label of topList) {
+        const job2 = buildFilteredJob(label);
+        const res = await buildAggCard(job2, {}, window.currentAggregationSession || null);
+        if (res && res.card) {
+          grid.appendChild(res.card);
+          if (res.explanationTask) {
+            explanationTasks.push(res.explanationTask);
+          } else if (res.initialAgg) {
+            explanationTasks.push({ agg: res.initialAgg, job: job2, card: res.card });
+          }
+        }
+      }
+      try {
+        for (const task of explanationTasks) {
+          await generateExplanation(task.agg, task.job, task.card);
+        }
+      } catch (e) {
+        console.warn('Global desc-gen explanation generation failed:', e);
+      }
+      try { checkAndGenerateAISummary(); } catch {}
+      applyMasonryLayout();
+      debouncedAutoSave();
+      showToast('Generated top 10 Description filtered cards.', 'success');
+    };
+    return true;
+  } catch (e) {
+    console.warn('initGlobalDescControls failed:', e);
+    return false;
+  }
+}
+
+function updateGlobalDescControls(containerEl = null) {
+  try {
+    const container = containerEl || document.getElementById('global-desc-filter-controls');
+    const bar = document.getElementById('global-desc-filter-bar') || (container && container.closest('#global-desc-filter-bar')) || null;
+    if (!container) return false;
+
+    const { descValues, hasDesc } = computeDescValues();
+    if (!hasDesc || descValues.length === 0) {
+      if (bar) bar.style.display = 'none';
+      container.innerHTML = '';
+      return false;
+    }
+
+    const selectEl = container.querySelector('.desc-select');
+    if (!selectEl) {
+      // Not initialized yet; create from scratch
+      return initGlobalDescControls(container);
+    }
+
+    const current = selectEl.value;
+    selectEl.innerHTML = `<option value="">— choose —</option>` + descValues.map(v => `<option value="${v}">${v}</option>`).join('');
+    if (current && descValues.includes(current)) {
+      selectEl.value = current;
+    }
+    if (bar) bar.style.display = '';
+    return true;
+  } catch (e) {
+    console.warn('updateGlobalDescControls failed:', e);
+    return false;
+  }
+}
+
 // Export the functions for use in the main file
 export {
     buildAggCard,
-    getAiAnalysisPlan, 
+    getAiAnalysisPlan,
     getIntelligentAiAnalysisPlan,
     renderAggregates,
-    setGenerateButtonState
+    setGenerateButtonState,
+    initGlobalDescControls,
+    updateGlobalDescControls,
+    computeDescValues
 };
