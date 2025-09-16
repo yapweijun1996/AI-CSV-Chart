@@ -31,16 +31,25 @@ export function detectCrossTab(rows) {
     }
     const first = rows[0];
     const keys = Object.keys(first);
-    const hasCode = keys.includes('Code');
-    const hasDesc = keys.includes('Description');
-    const projectCols = keys.filter(k => k !== 'Code' && k !== 'Description');
+    const keyLowerMap = new Map(keys.map(k => [k.toLowerCase().trim(), k]));
+    const codeKey = keyLowerMap.get('code');
+    const descKey = keyLowerMap.get('description');
+
+    const hasCode = !!codeKey;
+    const hasDesc = !!descKey;
+
+    // Candidate project columns = keys - idCols (case-insensitive)
+    const projectCols = keys.filter(k => {
+      const lk = k.toLowerCase().trim();
+      return lk !== 'code' && lk !== 'description';
+    });
     const projLike = projectCols.filter(isLikelyProjectColumnName);
     const projLikeRatio = projectCols.length ? (projLike.length / projectCols.length) : 0;
 
-    // Heuristics: needs Code+Description, many project-like columns,
-    // and the first data row (row 0) carries textual labels for those columns.
-    const codeBlank = isBlank(first['Code']);
-    const descBlank = isBlank(first['Description']);
+    // Heuristics: first data row carries textual labels in project columns,
+    // while id columns in first row are blank (double-header pattern).
+    const codeBlank = hasCode ? isBlank(first[codeKey]) : false;
+    const descBlank = hasDesc ? isBlank(first[descKey]) : false;
     const labelRatio = nonNumericStringRatio(first, projLike);
 
     const isCross = hasCode && hasDesc && projectCols.length >= 5 && projLikeRatio >= 0.4 && codeBlank && descBlank && labelRatio >= 0.3;
@@ -53,12 +62,17 @@ export function detectCrossTab(rows) {
       Math.min(0.1, labelRatio * 0.1 / 0.5)
     ];
     const confidence = confParts.reduce((a,b)=>a+b, 0);
+
+    const idCols = [];
+    if (codeKey) idCols.push(codeKey);
+    if (descKey) idCols.push(descKey);
+
     return {
       type: isCross ? 'cross-tab' : 'unknown',
       isCrossTab: isCross,
       confidence,
       headerRows: isCross ? 2 : 1,
-      idCols: ['Code','Description'],
+      idCols,
       projectCols: projLike
     };
   } catch (e) {
@@ -81,7 +95,7 @@ export function convertCrossTabToLong(rows, detection = null, options = {}) {
   }
   const det = detection || detectCrossTab(rows);
 
-  const {
+  let {
     idCols = ['Code','Description'],
     labelRowIndex = 0,
     dataStartRow = 1,
@@ -89,22 +103,32 @@ export function convertCrossTabToLong(rows, detection = null, options = {}) {
     includeCols = null
   } = options || {};
 
-  // Determine base keys from the first parsed row
+  // Determine base keys and build case-insensitive map
   const keys = Object.keys(rows[0] || {});
+  const keyLowerMap = new Map(keys.map(k => [k.toLowerCase().trim(), k]));
 
-  // Resolve id columns by name
-  const idSet = new Set(idCols.filter(k => keys.includes(k)));
+  // Resolve id columns: prefer detection.idCols (actual keys), else map options.idCols case-insensitively
+  let resolvedIdCols = Array.isArray(det?.idCols) && det.idCols.length
+    ? det.idCols.map(k => keyLowerMap.get(String(k).toLowerCase().trim()) || k).filter(Boolean)
+    : idCols.map(k => keyLowerMap.get(String(k).toLowerCase().trim()) || k).filter(Boolean);
 
-  // Candidate project columns = keys - idCols
-  let projectCols = keys.filter(k => !idSet.has(k));
+  // Fallback if still empty
+  if (!resolvedIdCols.length) {
+    if (keyLowerMap.get('code')) resolvedIdCols.push(keyLowerMap.get('code'));
+    if (keyLowerMap.get('description')) resolvedIdCols.push(keyLowerMap.get('description'));
+  }
 
-  // Apply include/exclude
+  // Candidate project columns = keys - resolvedIdCols
+  const idLowerSet = new Set(resolvedIdCols.map(x => String(x).toLowerCase().trim()));
+  let projectCols = keys.filter(k => !idLowerSet.has(String(k).toLowerCase().trim()));
+
+  // Apply include/exclude (case-insensitive)
   if (Array.isArray(includeCols) && includeCols.length > 0) {
-    const inc = new Set(includeCols);
-    projectCols = projectCols.filter(c => inc.has(c));
+    const inc = new Set(includeCols.map(x => String(x).toLowerCase().trim()));
+    projectCols = projectCols.filter(c => inc.has(c.toLowerCase().trim()));
   } else if (Array.isArray(excludeCols) && excludeCols.length > 0) {
-    const exc = new Set(excludeCols);
-    projectCols = projectCols.filter(c => !exc.has(c));
+    const exc = new Set(excludeCols.map(x => String(x).toLowerCase().trim()));
+    projectCols = projectCols.filter(c => !exc.has(c.toLowerCase().trim()));
   }
 
   // Label row and data rows
@@ -113,10 +137,13 @@ export function convertCrossTabToLong(rows, detection = null, options = {}) {
   const dataRows = rows.slice(Math.max(0, dataStartRow));
 
   const long = [];
-  for (let ri = 0; ri < dataRows.length; ri++) {
-    const r = dataRows[ri];
-    const Code = r['Code'];
-    const Description = r['Description'];
+  for (const r of dataRows) {
+    const Code = resolvedIdCols[0]
+      ? r[resolvedIdCols[0]]
+      : (keyLowerMap.get('code') ? r[keyLowerMap.get('code')] : r['Code']);
+    const Description = resolvedIdCols[1]
+      ? r[resolvedIdCols[1]]
+      : (keyLowerMap.get('description') ? r[keyLowerMap.get('description')] : r['Description']);
 
     for (const col of projectCols) {
       const ProjectId = col;

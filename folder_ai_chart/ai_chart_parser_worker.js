@@ -456,12 +456,18 @@ function detectCSVType(rows) {
     if (!r0 || typeof r0 !== 'object') {
       return { type: 'unknown', isCrossTab: false, confidence: 0, headerRows: 1, idCols: [], dataStartRow: 0, projectCols: [] };
     }
+
     const keys = Object.keys(r0);
-    const hasCode = keys.includes('Code');
-    const hasDesc = keys.includes('Description');
+    const keyLowerMap = new Map(keys.map(k => [k.toLowerCase().trim(), k]));
+    const codeKey = keyLowerMap.get('code');
+    const descKey = keyLowerMap.get('description');
+
+    const hasCode = !!codeKey;
+    const hasDesc = !!descKey;
+
     const idCols = [];
-    if (hasCode) idCols.push('Code');
-    if (hasDesc) idCols.push('Description');
+    if (hasCode) idCols.push(codeKey);
+    if (hasDesc) idCols.push(descKey);
 
     // Consider all non-id columns as potential project columns
     const projectCandidates = keys.filter(k => !idCols.includes(k));
@@ -470,8 +476,8 @@ function detectCSVType(rows) {
 
     // Cross-tab heuristic: first data row carries textual labels in project columns,
     // while id columns in first row are blank (double-header pattern).
-    const codeBlank = hasCode ? isBlankWorker(r0['Code']) : false;
-    const descBlank = hasDesc ? isBlankWorker(r0['Description']) : false;
+    const codeBlank = hasCode ? isBlankWorker(r0[codeKey]) : false;
+    const descBlank = hasDesc ? isBlankWorker(r0[descKey]) : false;
     const labelRatio = nonNumericStringRatioWorker(r0, projLike);
 
     const isCross =
@@ -497,22 +503,24 @@ function detectCSVType(rows) {
         isCrossTab: true,
         confidence,
         headerRows: 2,
-        idCols: ['Code', 'Description'],
+        idCols,
         dataStartRow: 1, // after label row (row 0)
         projectCols: projLike
       };
     }
 
-    // Attempt to classify as long if we have a canonical long schema subset
-    const hasLongCore = ['Code','Description'].every(k => keys.includes(k))
-                      && (keys.includes('Value') || keys.some(k => /amount|total|value|sales|revenue/i.test(k)));
+    // Attempt to classify as long if we have a canonical long schema subset (case-insensitive)
+    const hasLongCore =
+      ['code','description'].every(k => keyLowerMap.has(k)) &&
+      (keys.some(k => /^value$/i.test(k)) || keys.some(k => /amount|total|value|sales|revenue/i.test(k)));
+
     if (hasLongCore) {
       return {
         type: 'long',
         isCrossTab: false,
         confidence: Math.max(0.4, confidence), // bump a bit if it looks structured
         headerRows: 1,
-        idCols: ['Code','Description'].filter(k => keys.includes(k)),
+        idCols: idCols.length ? idCols : [],
         dataStartRow: 0,
         projectCols: []
       };
