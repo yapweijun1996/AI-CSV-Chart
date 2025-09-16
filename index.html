@@ -6,6 +6,14 @@
 		<title>AI Chart</title>
 		
 		<script>
+			(function () {
+				const TEMP_GEMINI_API_KEY = '';
+				if(TEMP_GEMINI_API_KEY != ''){
+					try { localStorage.setItem('gemini_api_key', TEMP_GEMINI_API_KEY); } catch (_) {}
+				}
+			})();
+		</script>
+		<script>
 			(function() {
 				const VERSION_MODE = 'realtime'; // Can be 'realtime', 'daily', or a static string like '1.0.1'
 
@@ -656,14 +664,6 @@
 			<div id="toast-container" class="toast-container"></div>
 			<div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 			
-			<script>
-				(function () {
-					const TEMP_GEMINI_API_KEY = '';
-					if(TEMP_GEMINI_API_KEY != ''){
-						try { localStorage.setItem('gemini_api_key', TEMP_GEMINI_API_KEY); } catch (_) {}
-					}
-				})();
-			</script>
 			<script type="module">
 				import './folder_ai_chart/ai_chart_chat.js';
 				import './folder_ai_chart/ai_chart_ui.js';
