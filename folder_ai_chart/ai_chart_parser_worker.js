@@ -5,7 +5,7 @@
 /* global self, Papa */
 
 try {
-  // Load PapaParse inside the worker scope; jsDelivr sends proper CORS headers
+  // Load PapaParse inside the worker scope; jsDelivr sends proper CORS headers 
   const version = new URLSearchParams(self.location.search).get('v');
   const scriptUrl = version
     ? `https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js?v=${version}`

@@ -1,5 +1,5 @@
 // Cross-tab detector and transformer (unpivot) for CSV datasets
-// Produces canonical long format: { Code, Description, ProjectId, ProjectName, Value, RawValue }
+// Produces canonical long format: { Code, Description, ProjectId, ProjectName, Value, RawValue } 
 
 import { toNum } from './ai_chart_utils.js';
 
