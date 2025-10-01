@@ -23,7 +23,7 @@ import { showToast } from './ai_chart_toast_system.js';
 import { initializeChat, refreshChatUI } from './ai_chart_chat.js';
 import { AITaskManager, createWorkflowManager } from './ai_chart_task_manager.js';
 import { initWorkflowUI, runAiWorkflow, generateExplanation, checkAndGenerateAISummary, renderExplanationCard } from './ai_chart_ui_workflow.js';
-import { buildAggCard, getAiAnalysisPlan, getIntelligentAiAnalysisPlan, renderAggregates, setGenerateButtonState, initGlobalDescControls, updateGlobalDescControls } from './ai_chart_ui_helpers.js';
+import { buildAggCard, getAiAnalysisPlan, getIntelligentAiAnalysisPlan, renderAggregates, setGenerateButtonState, initGlobalDescControls, updateGlobalDescControls, buildLongFormatEnhancements } from './ai_chart_ui_helpers.js';
 import { detectCrossTab, convertCrossTabToLong } from './ai_chart_transformers.js';
 // Moved raw data table implementation to separate module
 import {
@@ -733,7 +733,35 @@ function autoPlan(profile, rows, excludedDimensions = []) {
       });
     }
   });
-  
+
+  try {
+    const enhancements = buildLongFormatEnhancements(profile, rows, {
+      metricKey: primary?.name || 'Value',
+      rowEstimate: profile?.rowCount || rows.length
+    });
+    const extraTopJobs = (enhancements.topKJobs || []).slice(0, 5);
+    for (const job of extraTopJobs) {
+      if (jobs.length >= 10) break;
+      jobs.push(job);
+      const jobIndex = jobs.length - 1;
+      if (jobIndex < 10) {
+        const metricLabel = job.metric || primary?.name || 'Value';
+        const whereLabel = job.where ? Object.values(job.where)[0] : '';
+        charts.push({
+          useJob: jobIndex,
+          preferredType: 'bar',
+          title: `${metricLabel} by ${job.groupBy}${whereLabel ? ` — ${whereLabel}` : ''}`,
+          priority: 'normal'
+        });
+      }
+    }
+    if (enhancements.pivotJob && jobs.length < 10) {
+      jobs.push(enhancements.pivotJob);
+    }
+  } catch (e) {
+    console.warn('buildLongFormatEnhancements failed in autoPlan:', e);
+  }
+
   // Secondary metric analysis with business context
   const secondaryMetrics = [
     ...quantityMetrics.filter(m => m.col.name !== primary?.name).slice(0,1),

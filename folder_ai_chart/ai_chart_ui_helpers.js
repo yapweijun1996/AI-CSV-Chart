@@ -7,6 +7,7 @@ import { GeminiAPI, workflowTimer } from './ai_chart_engine.js';
 import { getErpAnalysisPriority } from './ai_chart_erp_logic.js';
 import { applyMasonryLayout } from './ai_chart_masonry.js';
 import { renderExplanationCard, generateExplanation, runAiWorkflow, checkAndGenerateAISummary, updateAiTodoList } from './ai_chart_ui_workflow.js';
+import { toNum } from './ai_chart_utils.js';
 
 // Helper functions extracted from ai_chart_ui.js
 // This file contains the largest, most complex functions dealing with DOM manipulation and AI integration
@@ -72,6 +73,144 @@ function sanitizeRows(rows) {
     console.warn('sanitizeRows failed:', e);
     return Array.isArray(rows) ? rows : [];
   }
+}
+
+function findColumnCaseInsensitive(names = [], preferred = '') {
+  if (!Array.isArray(names) || !names.length || !preferred) return null;
+  const idx = names.findIndex(name => String(name).toLowerCase() === String(preferred).toLowerCase());
+  return idx >= 0 ? names[idx] : null;
+}
+
+function detectColumnByKeyword(names = [], keyword = '') {
+  if (!Array.isArray(names) || !keyword) return null;
+  const key = keyword.toLowerCase();
+  return names.find(name => String(name).toLowerCase().includes(key)) || null;
+}
+
+function detectProjectColumn(names = []) {
+  const lowered = names.map(n => String(n).toLowerCase());
+  const priority = ['project_id', 'projectid', 'project code', 'project_code', 'projectname', 'project name'];
+  for (const candidate of priority) {
+    const idx = lowered.indexOf(candidate);
+    if (idx >= 0) return names[idx];
+  }
+  return names.find(name => {
+    const lc = String(name).toLowerCase();
+    return lc.includes('project') && (lc.includes('code') || lc.includes('id') || lc.includes('name'));
+  }) || null;
+}
+
+function detectMetricColumn(names = []) {
+  const lowered = names.map(n => String(n).toLowerCase());
+  const priority = ['value', 'amount', 'total'];
+  for (const candidate of priority) {
+    const idx = lowered.indexOf(candidate);
+    if (idx >= 0) return names[idx];
+  }
+  return names.find(name => {
+    const lc = String(name).toLowerCase();
+    return lc.includes('amount') || lc.includes('total') || lc.includes('value');
+  }) || null;
+}
+
+export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
+  const {
+    metricKey = 'Value',
+    descriptionKey = 'Description',
+    secondaryGroupKey = 'ProjectId',
+    minRows = 10,
+    topKLimit = 5,
+    includeRevenueBoost = true,
+    pivotTopCols = 12,
+    pivotTopRows = 30,
+    pivotRowLimit = 20000,
+    pivotDescLimit = 120,
+    pivotGroupLimit = 150,
+    rowEstimate: explicitRowEstimate
+  } = options;
+
+  const extras = { topKJobs: [], pivotJob: null, meta: {} };
+  const profileCols = Array.isArray(profile?.columns) ? profile.columns : [];
+  const columnNames = profileCols.map(c => c.name);
+  const rows = sanitizeRows(rowsSource);
+  if (!Array.isArray(rows) || rows.length < minRows) {
+    return extras;
+  }
+
+  const actualMetric = findColumnCaseInsensitive(columnNames, metricKey)
+    || detectColumnByKeyword(columnNames, metricKey)
+    || detectMetricColumn(columnNames);
+  const actualDesc = findColumnCaseInsensitive(columnNames, descriptionKey)
+    || detectColumnByKeyword(columnNames, 'description');
+  const actualGroup = findColumnCaseInsensitive(columnNames, secondaryGroupKey)
+    || detectProjectColumn(columnNames);
+
+  extras.meta = {
+    metricName: actualMetric,
+    descriptionName: actualDesc,
+    secondaryGroupName: actualGroup
+  };
+
+  if (!actualMetric || !actualDesc) {
+    return extras;
+  }
+
+  const sums = new Map();
+  for (const row of rows) {
+    if (!row || !(actualDesc in row)) continue;
+    const rawDesc = row[actualDesc];
+    const desc = typeof rawDesc === 'string' ? rawDesc.trim() : String(rawDesc ?? '').trim();
+    if (!desc || /^total$/i.test(desc)) continue;
+    const numericVal = toNum(row[actualMetric]);
+    if (!Number.isFinite(numericVal)) continue;
+    sums.set(desc, (sums.get(desc) || 0) + numericVal);
+  }
+
+  if (sums.size > 0 && actualGroup) {
+    const ordered = Array.from(sums.entries()).sort((a, b) => b[1] - a[1]);
+    let topK = ordered.slice(0, topKLimit).map(([label]) => label);
+    if (includeRevenueBoost) {
+      ['Revenue', 'CONSTRUCTION CONTRACT REVENUE', 'Total Revenue'].forEach(label => {
+        if (sums.has(label) && !topK.includes(label)) topK.push(label);
+      });
+    }
+    extras.topKJobs = topK.map(desc => ({
+      groupBy: actualGroup,
+      metric: actualMetric,
+      agg: 'sum',
+      where: { [actualDesc]: desc }
+    }));
+  }
+
+  if (actualGroup) {
+    const descMeta = profileCols.find(c => String(c.name).toLowerCase() === String(actualDesc).toLowerCase());
+    const groupMeta = profileCols.find(c => String(c.name).toLowerCase() === String(actualGroup).toLowerCase());
+    const descUnique = Number(descMeta?.unique ?? 0);
+    const groupUnique = Number(groupMeta?.unique ?? 0);
+    const rowEstimate = explicitRowEstimate ?? profile?.rowCount ?? rows.length;
+    const withinDescLimit = !descUnique || descUnique <= pivotDescLimit;
+    const withinGroupLimit = !groupUnique || groupUnique <= pivotGroupLimit;
+    const withinRowLimit = !rowEstimate || rowEstimate <= pivotRowLimit;
+
+    if (withinDescLimit && withinGroupLimit && withinRowLimit) {
+      extras.pivotJob = {
+        type: 'pivot',
+        rowsDim: actualDesc,
+        colsDim: actualGroup,
+        metric: actualMetric,
+        agg: 'sum',
+        pivotOptions: { topCols: pivotTopCols, topRows: pivotTopRows }
+      };
+    } else {
+      console.log('[Pivot] Skipping pivot job due to cardinality/row guard', {
+        descUnique,
+        groupUnique,
+        rowEstimate
+      });
+    }
+  }
+
+  return extras;
 }
 
 /**
@@ -1016,80 +1155,22 @@ async function getAiAnalysisPlan(context) {
         if (g && m) jobs = [{ groupBy: g, metric: m, agg: 'sum' }];
     }
 
-    // Enrich plan with filtered breakdowns for top Description categories (cross-tab long schema)
     try {
-        if (hasValue && hasDesc) {
-            const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
-              ? window.AGG_ROWS
-              : (Array.isArray(context.includedRows) ? context.includedRows : []);
-            const rows = sanitizeRows(rowsSource);
-
-            if (Array.isArray(rows) && rows.length >= 10) {
-                const sums = new Map();
-                for (const r of rows) {
-                    const d = r && r.Description;
-                    if (d === null || d === undefined) continue;
-                    const dn = String(d).trim();
-                    if (!dn || /^total$/i.test(dn)) continue;
-                    let v = Number(r?.Value);
-                    if (!Number.isFinite(v)) {
-                        const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
-                        v = Number.isFinite(parsed) ? parsed : NaN;
-                    }
-                    if (!Number.isFinite(v)) continue;
-                    sums.set(dn, (sums.get(dn) || 0) + v);
-                }
-
-                const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
-                ['Revenue','CONSTRUCTION CONTRACT REVENUE'].forEach(label => {
-                    if (sums.has(label) && !topK.includes(label)) topK.push(label);
-                });
-
-                const filtered = [];
-                for (const desc of topK) {
-                    filtered.push({ groupBy: 'ProjectId', metric: 'Value', agg: 'sum', where: { Description: desc } });
-                }
-                if (filtered.length) {
-                    jobs = deduplicateJobs([...(jobs || []), ...filtered]).slice(0, 12);
-                }
-            } else {
-                console.log('[Top-K] Skipping description breakdown due to insufficient rows');
-            }
+        const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+          ? window.AGG_ROWS
+          : (Array.isArray(context.includedRows) ? context.includedRows : []);
+        const enhancements = buildLongFormatEnhancements(context.profile, rowsSource, {
+            metricKey: hasValue ? 'Value' : 'Amount',
+            rowEstimate: context.profile?.rowCount || rowsSource.length || (context.includedRows ? context.includedRows.length : 0)
+        });
+        if (enhancements.topKJobs.length) {
+            jobs = deduplicateJobs([...(jobs || []), ...enhancements.topKJobs]).slice(0, 12);
+        }
+        if (enhancements.pivotJob) {
+            jobs = deduplicateJobs([...(jobs || []), enhancements.pivotJob]).slice(0, 12);
         }
     } catch (e) {
-        console.warn('Top-K Description breakdown planning failed:', e);
-    }
-
-    // Add a Pivot template (Description × ProjectId) for long schema
-    try {
-        if (hasValue && hasDesc && hasPid) {
-            const profileCols = Array.isArray(context.profile?.columns) ? context.profile.columns : [];
-            const descMeta = profileCols.find(c => c.name === 'Description');
-            const pidMeta = profileCols.find(c => c.name === 'ProjectId');
-            const rowEstimate = context.profile?.rowCount || rowsSource.length || (context.includedRows ? context.includedRows.length : 0);
-            const pivotCardinalityOk = (!descMeta || (Number(descMeta.unique) || 0) <= 120) && (!pidMeta || (Number(pidMeta.unique) || 0) <= 150);
-            const pivotRowOk = !rowEstimate || rowEstimate <= 20000;
-
-            if (pivotCardinalityOk && pivotRowOk) {
-                const pivotJob = {
-                    type: 'pivot',
-                    rowsDim: 'Description',
-                    colsDim: 'ProjectId',
-                    metric: 'Value',
-                    agg: 'sum',
-                    pivotOptions: { topCols: 12, topRows: 30 }
-                };
-                jobs = deduplicateJobs([...(jobs || []), pivotJob]).slice(0, 12);
-            } else {
-                console.log('[Pivot] Skipping pivot job due to cardinality or row-count guard', {
-                    descUnique: descMeta?.unique,
-                    pidUnique: pidMeta?.unique,
-                    rowEstimate
-                });
-            }
-        }
-    } catch (e) {
-        console.warn('Pivot job planning failed:', e);
+        console.warn('Long-format enhancement planning failed:', e);
     }
 
     return {
@@ -1315,40 +1396,14 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
                     const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
                         ? window.AGG_ROWS
                         : (Array.isArray(context.includedRows) ? context.includedRows : []);
-
-                    if (Array.isArray(rowsSource) && rowsSource.length >= 10) {
-                        const numCols = (context.profile?.columns || []).filter(c => c.type === 'number').map(c => c.name);
-                        const metricName = hasValue ? 'Value' : (preferFinancialMetric(numCols) || numCols[0] || null);
-                        const groupByName = hasPid ? 'ProjectId' : ((context.profile?.columns || []).find(c => c.type === 'string')?.name || 'Description');
-
-                        if (metricName) {
-                            const sums = new Map();
-                            for (const r of rowsSource || []) {
-                                const d = (r && r.Description != null) ? String(r.Description).trim() : '';
-                                if (!d || /^total$/i.test(d)) continue;
-                                let v = Number(r?.[metricName]);
-                                if (!Number.isFinite(v)) {
-                                    const parsed = parseFloat(String(r?.[metricName] ?? '').replace(/,/g, ''));
-                                    v = Number.isFinite(parsed) ? parsed : NaN;
-                                }
-                                if (!Number.isFinite(v)) continue;
-                                sums.set(d, (sums.get(d) || 0) + v);
-                            }
-                            const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
-                            if (metricName === 'Value') {
-                                ['Revenue','CONSTRUCTION CONTRACT REVENUE'].forEach(label => {
-                                    if (sums.has(label) && !topK.includes(label)) topK.push(label);
-                                });
-                            }
-                            additionalJobs = topK.map(desc => ({
-                                groupBy: groupByName,
-                                metric: metricName,
-                                agg: 'sum',
-                                where: { Description: desc }
-                            }));
-                        }
-                    } else {
-                        console.log('[Top-K] Skipping AI reinforcement breakdown due to insufficient rows');
+                    const metricName = hasValue ? 'Value' : (preferFinancialMetric((context.profile?.columns || []).filter(c => c.type === 'number').map(c => c.name)) || 'Value');
+                    const enhancements = buildLongFormatEnhancements(context.profile, rowsSource, {
+                        metricKey: metricName,
+                        rowEstimate: context.profile?.rowCount || rowsSource.length || (context.includedRows ? context.includedRows.length : 0)
+                    });
+                    additionalJobs = enhancements.topKJobs;
+                    if (enhancements.pivotJob) {
+                        additionalJobs = [...additionalJobs, enhancements.pivotJob];
                     }
                 }
             } catch (e) {
