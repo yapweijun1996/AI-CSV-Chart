@@ -1019,41 +1019,41 @@ async function getAiAnalysisPlan(context) {
     // Enrich plan with filtered breakdowns for top Description categories (cross-tab long schema)
     try {
         if (hasValue && hasDesc) {
-            // Use full converted long rows for robust Top-K (context.includedRows is a tiny sample)
             const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
               ? window.AGG_ROWS
               : (Array.isArray(context.includedRows) ? context.includedRows : []);
             const rows = sanitizeRows(rowsSource);
 
-            const sums = new Map();
-            for (const r of rows) {
-                const d = r && r.Description;
-                if (d === null || d === undefined) continue;
-                const dn = String(d).trim();
-                if (!dn || /^total$/i.test(dn)) continue;
-                let v = Number(r?.Value);
-                if (!Number.isFinite(v)) {
-                    const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
-                    v = Number.isFinite(parsed) ? parsed : NaN;
+            if (Array.isArray(rows) && rows.length >= 10) {
+                const sums = new Map();
+                for (const r of rows) {
+                    const d = r && r.Description;
+                    if (d === null || d === undefined) continue;
+                    const dn = String(d).trim();
+                    if (!dn || /^total$/i.test(dn)) continue;
+                    let v = Number(r?.Value);
+                    if (!Number.isFinite(v)) {
+                        const parsed = parseFloat(String(r?.Value ?? '').replace(/,/g, ''));
+                        v = Number.isFinite(parsed) ? parsed : NaN;
+                    }
+                    if (!Number.isFinite(v)) continue;
+                    sums.set(dn, (sums.get(dn) || 0) + v);
                 }
-                if (!Number.isFinite(v)) continue;
-                sums.set(dn, (sums.get(dn) || 0) + v);
-            }
 
-            // Top-K by Value (auto Top-10 when cross-tab → long is present)
-            const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
+                const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
+                ['Revenue','CONSTRUCTION CONTRACT REVENUE'].forEach(label => {
+                    if (sums.has(label) && !topK.includes(label)) topK.push(label);
+                });
 
-            // Ensure common revenue terms included if present
-            ['Revenue','CONSTRUCTION CONTRACT REVENUE'].forEach(label => {
-                if (sums.has(label) && !topK.includes(label)) topK.push(label);
-            });
-
-            const filtered = [];
-            for (const desc of topK) {
-                filtered.push({ groupBy: 'ProjectId', metric: 'Value', agg: 'sum', where: { Description: desc } });
-            }
-            if (filtered.length) {
-                jobs = deduplicateJobs([...(jobs || []), ...filtered]).slice(0, 12);
+                const filtered = [];
+                for (const desc of topK) {
+                    filtered.push({ groupBy: 'ProjectId', metric: 'Value', agg: 'sum', where: { Description: desc } });
+                }
+                if (filtered.length) {
+                    jobs = deduplicateJobs([...(jobs || []), ...filtered]).slice(0, 12);
+                }
+            } else {
+                console.log('[Top-K] Skipping description breakdown due to insufficient rows');
             }
         }
     } catch (e) {
@@ -1063,15 +1063,30 @@ async function getAiAnalysisPlan(context) {
     // Add a Pivot template (Description × ProjectId) for long schema
     try {
         if (hasValue && hasDesc && hasPid) {
-            const pivotJob = {
-                type: 'pivot',
-                rowsDim: 'Description',
-                colsDim: 'ProjectId',
-                metric: 'Value',
-                agg: 'sum',
-                pivotOptions: { topCols: 12, topRows: 30 }
-            };
-            jobs = deduplicateJobs([...(jobs || []), pivotJob]).slice(0, 12);
+            const profileCols = Array.isArray(context.profile?.columns) ? context.profile.columns : [];
+            const descMeta = profileCols.find(c => c.name === 'Description');
+            const pidMeta = profileCols.find(c => c.name === 'ProjectId');
+            const rowEstimate = context.profile?.rowCount || rowsSource.length || (context.includedRows ? context.includedRows.length : 0);
+            const pivotCardinalityOk = (!descMeta || (Number(descMeta.unique) || 0) <= 120) && (!pidMeta || (Number(pidMeta.unique) || 0) <= 150);
+            const pivotRowOk = !rowEstimate || rowEstimate <= 20000;
+
+            if (pivotCardinalityOk && pivotRowOk) {
+                const pivotJob = {
+                    type: 'pivot',
+                    rowsDim: 'Description',
+                    colsDim: 'ProjectId',
+                    metric: 'Value',
+                    agg: 'sum',
+                    pivotOptions: { topCols: 12, topRows: 30 }
+                };
+                jobs = deduplicateJobs([...(jobs || []), pivotJob]).slice(0, 12);
+            } else {
+                console.log('[Pivot] Skipping pivot job due to cardinality or row-count guard', {
+                    descUnique: descMeta?.unique,
+                    pidUnique: pidMeta?.unique,
+                    rowEstimate
+                });
+            }
         }
     } catch (e) {
         console.warn('Pivot job planning failed:', e);
@@ -1297,35 +1312,43 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
                 const hasPid = names.includes('ProjectId');
 
                 if (hasDesc) {
-                    // Prefer converted long rows for robust Top-K
                     const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
                         ? window.AGG_ROWS
                         : (Array.isArray(context.includedRows) ? context.includedRows : []);
 
-                    const numCols = (context.profile?.columns || []).filter(c => c.type === 'number').map(c => c.name);
-                    const metricName = hasValue ? 'Value' : (preferFinancialMetric(numCols) || numCols[0] || null);
-                    const groupByName = hasPid ? 'ProjectId' : ((context.profile?.columns || []).find(c => c.type === 'string')?.name || 'Description');
+                    if (Array.isArray(rowsSource) && rowsSource.length >= 10) {
+                        const numCols = (context.profile?.columns || []).filter(c => c.type === 'number').map(c => c.name);
+                        const metricName = hasValue ? 'Value' : (preferFinancialMetric(numCols) || numCols[0] || null);
+                        const groupByName = hasPid ? 'ProjectId' : ((context.profile?.columns || []).find(c => c.type === 'string')?.name || 'Description');
 
-                    if (metricName) {
-                        const sums = new Map();
-                        for (const r of rowsSource || []) {
-                            const d = (r && r.Description != null) ? String(r.Description).trim() : '';
-                            if (!d || /^total$/i.test(d)) continue;
-                            let v = Number(r?.[metricName]);
-                            if (!Number.isFinite(v)) {
-                                const parsed = parseFloat(String(r?.[metricName] ?? '').replace(/,/g, ''));
-                                v = Number.isFinite(parsed) ? parsed : NaN;
+                        if (metricName) {
+                            const sums = new Map();
+                            for (const r of rowsSource || []) {
+                                const d = (r && r.Description != null) ? String(r.Description).trim() : '';
+                                if (!d || /^total$/i.test(d)) continue;
+                                let v = Number(r?.[metricName]);
+                                if (!Number.isFinite(v)) {
+                                    const parsed = parseFloat(String(r?.[metricName] ?? '').replace(/,/g, ''));
+                                    v = Number.isFinite(parsed) ? parsed : NaN;
+                                }
+                                if (!Number.isFinite(v)) continue;
+                                sums.set(d, (sums.get(d) || 0) + v);
                             }
-                            if (!Number.isFinite(v)) continue;
-                            sums.set(d, (sums.get(d) || 0) + v);
+                            const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
+                            if (metricName === 'Value') {
+                                ['Revenue','CONSTRUCTION CONTRACT REVENUE'].forEach(label => {
+                                    if (sums.has(label) && !topK.includes(label)) topK.push(label);
+                                });
+                            }
+                            additionalJobs = topK.map(desc => ({
+                                groupBy: groupByName,
+                                metric: metricName,
+                                agg: 'sum',
+                                where: { Description: desc }
+                            }));
                         }
-                        const topK = Array.from(sums.entries()).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
-                        additionalJobs = topK.map(desc => ({
-                            groupBy: groupByName,
-                            metric: metricName,
-                            agg: 'sum',
-                            where: { Description: desc }
-                        }));
+                    } else {
+                        console.log('[Top-K] Skipping AI reinforcement breakdown due to insufficient rows');
                     }
                 }
             } catch (e) {

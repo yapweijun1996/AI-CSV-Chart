@@ -186,9 +186,21 @@ export function inferRole(col, profile, rows) {
       const val = row[name];
       return val === null || val === '' || (!isNaN(Number(val)));
     });
-    
+
     // For ERP: If it's all numeric, treat as metric only (no dimension possibility)
     if (isAllNumeric) {
+      // Codes/IDs that are stored as pure numbers should still behave like dimensions
+      if (patterns.code || patterns.entityId || CODE_LIKE_NUM.test(name)) {
+        return {
+          role: 'dimension',
+          category: 'code',
+          priority: 'high',
+          unsuitable: isUnsuitable,
+          completeness,
+          cardinality: uniq,
+          identifier: true
+        };
+      }
       // Absolute highest priority for 'Amount', 'Total', or 'Revenue' in ERP systems
       if (/amount|total|revenue/i.test(name)) return { role: 'metric:strong', category: 'financial', priority: 'critical', erp: true };
 
@@ -204,12 +216,20 @@ export function inferRole(col, profile, rows) {
       // Even generic numeric columns in ERP should be summed, not counted
       return { role: 'metric:strong', category: 'amount', priority: 'normal', erp: true };
     }
-    
+
     // ID-like numbers (codes, postal codes, etc.) - mixed content
     if (patterns.code || patterns.entityId || CODE_LIKE_NUM.test(name)) {
-      return { role: 'id', category: 'identifier', priority: 'normal', unsuitable: isUnsuitable, completeness };
+      return {
+        role: 'dimension',
+        category: 'code',
+        priority: 'normal',
+        unsuitable: isUnsuitable,
+        completeness,
+        cardinality: uniq,
+        identifier: true
+      };
     }
-    
+
     // Fallback for mixed numeric content
     return { role: 'metric', category: 'general', priority: 'low' };
   }

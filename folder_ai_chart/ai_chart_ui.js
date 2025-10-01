@@ -634,6 +634,7 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     contact: dims.filter(d => d.category === 'contact'),
     status: dims.filter(d => d.category === 'status'),
     hierarchy: dims.filter(d => d.category === 'hierarchy'),
+    code: dims.filter(d => d.category === 'code' || d.identifier),
     temporal: dims.filter(d => d.category === 'temporal'),
     general: dims.filter(d => d.category === 'general' || !d.category)
   };
@@ -673,14 +674,28 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     ...businessDims.status.slice(0,1),      // Status/Category (highest business value)
     ...businessDims.location.slice(0,1),    // Geographic analysis
     ...businessDims.hierarchy.slice(0,1),   // Organizational structure
+    ...businessDims.code.slice(0,2),        // Identifier/code columns that still behave dimensionally
     ...businessDims.temporal.slice(0,1),    // Temporal categories
     ...businessDims.general.slice(0,2)      // General dimensions
-  ].slice(0,3);
-  
-  prioritizedDims.forEach(d => {
-    if (primary && d.col) {
-      // Financial metrics use sum, others use appropriate aggregation
-      const aggType = d.category === 'financial' ? 'sum' : 'sum';
+  ].filter(Boolean);
+
+  const limitedDims = [];
+  const seenDimNames = new Set();
+  for (const dim of prioritizedDims) {
+    const name = dim?.col?.name;
+    if (!name || seenDimNames.has(name)) continue;
+    limitedDims.push(dim);
+    seenDimNames.add(name);
+    if (limitedDims.length >= 4) break; // keep auto mode tidy but allow more coverage for long tables
+  }
+
+  limitedDims.forEach(d => {
+    if (!d || !d.col) return;
+    const uniqueCount = Number(d.col.unique ?? 0);
+    if (Number.isFinite(uniqueCount) && uniqueCount <= 1) return;
+
+    if (primary) {
+      const aggType = 'sum';
       jobs.push({
         groupBy: d.col.name,
         metric: primary.name,
@@ -688,43 +703,21 @@ function autoPlan(profile, rows, excludedDimensions = []) {
         category: d.category,
         priority: d.priority
       });
-      
-      // Smart chart type selection based on data category
+
       let chartType = 'bar';
       if (d.category === 'status' && d.col.unique <= 8) chartType = 'pie';
       else if (d.category === 'location') chartType = 'bar';
       else if (d.category === 'hierarchy') chartType = 'hbar';
       else if (d.col.unique <= 8) chartType = 'pie';
-      
+
       charts.push({
-        useJob: jobs.length-1,
+        useJob: jobs.length - 1,
         preferredType: chartType,
         title: `${primary.name} by ${d.col.name}`,
         category: d.category,
         priority: d.priority === 'high' ? 'high' : 'normal'
       });
-      
-      // Add average analysis for high-value dimensions
-      if (d.priority === 'high' || d.category === 'location') {
-        jobs.push({
-          groupBy: d.col.name,
-          metric: primary.name,
-          agg: 'avg',
-          category: d.category,
-          priority: d.priority
-        });
-        charts.push({
-          useJob: jobs.length-1,
-          preferredType: 'hbar',
-          title: `avg ${primary.name} by ${d.col.name}`,
-          category: d.category,
-          priority: 'normal'
-        });
-      }
-    }
-    
-    // Count analysis for all dimensions (only when no primary metric is available)
-    if (d.col && !primary) {
+    } else {
       jobs.push({
         groupBy: d.col.name,
         metric: null,
@@ -747,9 +740,9 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     ...generalMetrics.filter(m => m.col.name !== primary?.name).slice(0,1)
   ];
   
-  if (secondaryMetrics.length && prioritizedDims.length) {
+  if (secondaryMetrics.length && limitedDims.length) {
     const secondMetric = secondaryMetrics[0];
-    const topDim = prioritizedDims[0];
+    const topDim = limitedDims[0];
     if (secondMetric.col && topDim.col) {
       jobs.push({
         groupBy: topDim.col.name,
@@ -1718,4 +1711,3 @@ window.addEventListener('load', () => {
 
 // ========= AI Analysis Chat Implementation =========
 // Chat functionality has been moved to ai_chart_chat.js
-
