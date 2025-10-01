@@ -1048,7 +1048,8 @@ $('#loadBtn').onclick = async ()=>{
     {
       const det = window.CROSSTAB_DETECTION;
       const detTxt = det ? `, detected="${det.type || (det.isCrossTab ? 'cross-tab' : 'unknown')}"${typeof det.confidence === 'number' ? ` (${(det.confidence*100).toFixed(0)}%)` : ''}` : '';
-      $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns. (delimiter="${meta.delimiter}"${detTxt})`;
+      const skipTxt = meta && meta.skippedRows ? `, skippedMetaRows=${meta.skippedRows}` : '';
+      $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns. (delimiter="${meta.delimiter}"${detTxt}${skipTxt})`;
     }
     const resultsEl = $('#results');
     if (resultsEl) {
@@ -1562,7 +1563,8 @@ window.addEventListener('message', async (event) => {
         {
           const det = window.CROSSTAB_DETECTION;
           const detTxt = det ? `, detected="${det.type || (det.isCrossTab ? 'cross-tab' : 'unknown')}"${typeof det.confidence === 'number' ? ` (${(det.confidence*100).toFixed(0)}%)` : ''}` : '';
-          $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns from table data. (delimiter="${meta.delimiter}"${detTxt})`;
+          const skipTxt = meta && meta.skippedRows ? `, skippedMetaRows=${meta.skippedRows}` : '';
+          $('#meta').textContent = `Loaded ${PROFILE.rowCount.toLocaleString()} rows, ${PROFILE.columns.length} columns from table data. (delimiter="${meta.delimiter}"${detTxt}${skipTxt})`;
         }
         $('#results').innerHTML = '';
         

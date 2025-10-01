@@ -150,6 +150,68 @@ async function sniffText(file, bytes=256*1024){ const blob = await file.slice(0,
 function tryParsePreview(text, opt){
   return Papa.parse(text, { header: !!opt.header, preview: 25, skipEmptyLines: 'greedy', delimiter: opt.delimiter ?? "", quoteChar: '"', escapeChar: '"' });
 }
+function countNonEmptyCells(row){
+  if (!Array.isArray(row)) return 0;
+  let count = 0;
+  for (const value of row){
+    if (value == null) continue;
+    if (String(value).trim() === '') continue;
+    count++;
+  }
+  return count;
+}
+function estimateFieldCount(line, delimiter){
+  if (!line || !delimiter) return 0;
+  try {
+    const parsed = Papa.parse(line, { header:false, delimiter, dynamicTyping:false, skipEmptyLines:false, quoteChar:'"', escapeChar:'"' });
+    if (!parsed || !Array.isArray(parsed.data) || !parsed.data.length) return 0;
+    return countNonEmptyCells(parsed.data[0]);
+  } catch (e) {
+    console.warn('estimateFieldCount failed:', e);
+    return 0;
+  }
+}
+async function prepareFileForParsing(file, delimiter){
+  try {
+    if (!file || !file.size || !delimiter) return { fileToParse: file, skippedRows: 0, leadingLines: [] };
+    const headText = await sniffText(file);
+    if (!headText) return { fileToParse: file, skippedRows: 0, leadingLines: [] };
+    const newline = headText.includes('\r\n') ? '\r\n' : '\n';
+    const lines = headText.split(/\r?\n/);
+    let skipLines = 0;
+    const leadingLines = [];
+    let headerDetected = false;
+    for (let i = 0; i < lines.length; i++){
+      const rawLine = lines[i];
+      if (rawLine == null) break;
+      const trimmed = String(rawLine).trim();
+      if (trimmed === '') {
+        leadingLines.push(rawLine);
+        skipLines++;
+        continue;
+      }
+      const fieldCount = estimateFieldCount(rawLine, delimiter);
+      if (fieldCount >= 2) {
+        headerDetected = true;
+        break;
+      }
+      leadingLines.push(rawLine);
+      skipLines++;
+    }
+    if (!headerDetected || skipLines === 0) return { fileToParse: file, skippedRows: 0, leadingLines: [] };
+    const headerLine = lines[skipLines] ?? '';
+    if (estimateFieldCount(headerLine, delimiter) < 2) return { fileToParse: file, skippedRows: 0, leadingLines: [] };
+    const prefixText = leadingLines.join(newline) + newline;
+    const bytesToSkip = new Blob([prefixText]).size;
+    if (!bytesToSkip || bytesToSkip >= file.size) return { fileToParse: file, skippedRows: 0, leadingLines: [] };
+    const trimmedBlob = file.slice(bytesToSkip);
+    const trimmedFile = new File([trimmedBlob], file.name, { type: file.type, lastModified: file.lastModified });
+    return { fileToParse: trimmedFile, skippedRows: skipLines, leadingLines };
+  } catch (e) {
+    console.warn('prepareFileForParsing failed:', e);
+    return { fileToParse: file, skippedRows: 0, leadingLines: [] };
+  }
+}
 function scorePreview(res){ const rows = res.data || []; const lens = rows.map(r => Array.isArray(r) ? r.length : (typeof r==='object' ? Object.keys(r).length : 0)); const modal = lens.length ? mode(lens) : 0; const err = (res.errors || []).length; return { modalCols: modal, errors: err }; }
 function mode(arr){ const m=new Map(); let best=0, v=0; for(const x of arr){const c=(m.get(x)||0)+1; m.set(x,c); if(c>best){best=c; v=x}} return v; }
 async function autoDetect(file, header=true){
@@ -181,9 +243,30 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
   } else {
     delimiter = (delimiterChoice === '\t' || delimiterChoice === '	') ? '	' : delimiterChoice;
   }
-  
+
+  let parseTarget = file;
+  let skippedRowsInfo = { skippedRows: 0, leadingLines: [] };
+  if (header) {
+    try {
+      const prep = await prepareFileForParsing(file, delimiter);
+      parseTarget = prep.fileToParse || file;
+      skippedRowsInfo = {
+        skippedRows: prep.skippedRows || 0,
+        leadingLines: Array.isArray(prep.leadingLines) ? prep.leadingLines : []
+      };
+      if (skippedRowsInfo.skippedRows > 0) {
+        onProgress?.({ type: 'meta', text: `Skipping ${skippedRowsInfo.skippedRows} leading metadata row(s)…` });
+        console.log('Detected leading metadata rows to skip:', skippedRowsInfo);
+      }
+    } catch (trimErr) {
+      console.warn('prepareFileForParsing failed, continuing without trimming:', trimErr);
+      parseTarget = file;
+      skippedRowsInfo = { skippedRows: 0, leadingLines: [] };
+    }
+  }
+
   onProgress?.({ type: 'meta', text: `Parsing… (worker) delim="${delimiter}"` });
-  console.log('Starting parse with config:', { customWorker: true, header, delimiter, fileSize: file.size, fileName: file.name });
+  console.log('Starting parse with config:', { customWorker: true, header, delimiter, fileSize: file.size, parseSize: parseTarget.size, fileName: file.name });
   
   return new Promise((resolve,reject)=>{
     let rowCount = 0;
@@ -227,7 +310,7 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
             };
             
             try {
-              Papa.parse(file, fallbackConfig);
+              Papa.parse(parseTarget, fallbackConfig);
               return;
             } catch (fallbackErr) {
               console.error('Fallback parse failed to start:', fallbackErr);
@@ -253,6 +336,12 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
         }
         if (!meta || typeof meta !== 'object') meta = {};
         if (!('delimiter' in meta)) meta.delimiter = delimiter;
+        if (skippedRowsInfo.skippedRows > 0) {
+          meta.skippedRows = skippedRowsInfo.skippedRows;
+          if (!meta.leadingRows || !Array.isArray(meta.leadingRows)) {
+            meta.leadingRows = skippedRowsInfo.leadingLines.slice();
+          }
+        }
         
         onProgress?.({ type: 'meta', text: `Parsed ${data.length.toLocaleString()} rows` });
         
@@ -306,7 +395,7 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
           complete: completeHandler,
           error: errorHandler
         };
-        try{ Papa.parse(file, fallbackConfig); }catch(fallbackErr){
+        try{ Papa.parse(parseTarget, fallbackConfig); }catch(fallbackErr){
           console.error('Fallback parse failed to start after worker timeout:', fallbackErr);
           reject(new Error('Both worker and non-worker parsing failed to start'));
         }
@@ -327,7 +416,7 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
             complete: completeHandler,
             error: errorHandler
           };
-          try{ Papa.parse(file, fallbackConfig); }catch(fallbackErr){
+          try{ Papa.parse(parseTarget, fallbackConfig); }catch(fallbackErr){
             console.error('Fallback parse failed to start:', fallbackErr);
             reject(new Error('Both worker and non-worker parsing failed to start'));
           }
@@ -347,7 +436,7 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
             complete: completeHandler,
             error: errorHandler
           };
-          try{ Papa.parse(file, fallbackConfig); }catch(fallbackErr){
+          try{ Papa.parse(parseTarget, fallbackConfig); }catch(fallbackErr){
             console.error('Fallback parse failed to start:', fallbackErr);
             reject(new Error('Both worker and non-worker parsing failed to start'));
           }
@@ -385,7 +474,7 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
           complete: completeHandler,
           error: errorHandler
         };
-        try{ Papa.parse(file, fallbackConfig); }catch(fallbackErr){
+        try{ Papa.parse(parseTarget, fallbackConfig); }catch(fallbackErr){
           console.error('Fallback parse failed to start after worker error:', fallbackErr);
           reject(new Error('Both worker and non-worker parsing failed to start'));
         }
@@ -395,7 +484,7 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
         header, skipEmptyLines:'greedy', dynamicTyping:false, delimiter,
         quoteChar:'"', escapeChar:'"'
       };
-      worker.postMessage({ file, config: workerConfig });
+      worker.postMessage({ file: parseTarget, config: workerConfig });
     } catch (err) {
       clearTimeout(timeout);
       console.error('Error starting custom worker:', err);
@@ -410,7 +499,7 @@ export async function parseCSV(file, delimiterChoice, header=true, onProgress = 
         complete: completeHandler,
         error: errorHandler
       };
-      try{ Papa.parse(file, fallbackConfig); }catch(fallbackErr){
+      try{ Papa.parse(parseTarget, fallbackConfig); }catch(fallbackErr){
         console.error('Fallback parse failed to start after worker constructor error:', fallbackErr);
         reject(new Error('Both worker and non-worker parsing failed to start'));
       }
