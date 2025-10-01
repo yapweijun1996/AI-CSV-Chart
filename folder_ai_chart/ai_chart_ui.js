@@ -310,16 +310,9 @@ function getSelectedOptionsFromSelect(sel) {
 }
 
 function openSchemaMappingModal(){
-  const modal = document.getElementById('schemaMappingModal');
-  if (!modal) return showToast('Schema Mapping UI not available.', 'error');
-  if (!window.ROWS || !window.CROSSTAB_DETECTION || !window.CROSSTAB_DETECTION.isCrossTab) {
-    showToast('Schema Mapping is only available for detected cross-tab reports.', 'warning');
-    return;
-  }
-  populateSchemaMappingUI();
-  modal.classList.add('open');
-  modal.setAttribute('aria-hidden','false');
-  try { modal.focus(); } catch {}
+  // Cross-tab Schema Mapping is deprecated/disabled.
+  showToast('Schema Mapping has been disabled. Please provide long-format CSV input.', 'warning');
+  return;
 }
 
 function closeSchemaMappingModal(){
@@ -469,10 +462,23 @@ function applySchemaMapping(){
   const closeBtn = document.getElementById('closeSchemaMappingModal');
   const previewBtn = document.getElementById('mappingPreviewBtn');
   const applyBtn = document.getElementById('mappingApplyBtn');
-  if (adjustBtn) adjustBtn.onclick = openSchemaMappingModal;
-  if (closeBtn) closeBtn.onclick = closeSchemaMappingModal;
-  if (previewBtn) previewBtn.onclick = previewSchemaMapping;
-  if (applyBtn) applyBtn.onclick = applySchemaMapping;
+
+  // Disable Schema Mapping UI controls (deprecated)
+  if (adjustBtn) {
+    adjustBtn.onclick = () => showToast('Schema Mapping has been disabled. Please provide long-format CSV input.', 'warning');
+    try { adjustBtn.disabled = true; adjustBtn.style.display = 'none'; } catch {}
+  }
+  if (previewBtn) {
+    previewBtn.onclick = () => showToast('Schema Mapping preview disabled.', 'warning');
+    try { previewBtn.disabled = true; previewBtn.style.display = 'none'; } catch {}
+  }
+  if (applyBtn) {
+    applyBtn.onclick = () => showToast('Schema Mapping apply disabled.', 'warning');
+    try { applyBtn.disabled = true; applyBtn.style.display = 'none'; } catch {}
+  }
+  if (closeBtn) {
+    closeBtn.onclick = () => { try { closeSchemaMappingModal(); } catch {} };
+  }
 })();
 
 function debounce(fn, ms=250){ let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); }; }

@@ -420,47 +420,14 @@ async function loadHistoryState(id) {
     G.LAST_PARSE_META = history.meta || {};
     G.PROFILE = _deps.profile ? _deps.profile(G.ROWS) : (window.profile ? window.profile(G.ROWS) : null);
 
-    // Ensure AGG_ROWS/AGG_PROFILE are initialized for history loads.
-    // Many saved cards expect canonical long schema (Value/Description/ProjectId).
-    // If dataset is already long → use it directly; else try cross-tab detection + convert.
+    // Cross-tab conversion disabled for history loads — use saved data as-is.
     try {
       window.AGG_ROWS = null;
       window.AGG_PROFILE = null;
-
-      const row0 = (Array.isArray(G.ROWS) && G.ROWS.length) ? G.ROWS[0] : null;
-      const looksLong = !!(row0 && Object.prototype.hasOwnProperty.call(row0, 'Value') && Object.prototype.hasOwnProperty.call(row0, 'Description'));
-
-      if (looksLong) {
-        console.debug('[HistoryFix] Detected long schema in history rows → using as AGG_ROWS');
-        window.AGG_ROWS = G.ROWS;
-        window.AGG_PROFILE = G.PROFILE;
-        try { _deps.updateGlobalDescControls && _deps.updateGlobalDescControls(); } catch (e) { console.warn('[History] updateGlobalDescControls (looksLong) failed:', e); }
-      } else {
-        try {
-          const mod = await import('./ai_chart_transformers.js');
-          const detect = (mod && typeof mod.detectCrossTab === 'function') ? mod.detectCrossTab : null;
-          const convert = (mod && typeof mod.convertCrossTabToLong === 'function') ? mod.convertCrossTabToLong : null;
-
-          if (detect && convert) {
-            const detection = detect(G.ROWS);
-            if (detection && (detection.isCrossTab || detection.type === 'cross-tab')) {
-              console.debug('[HistoryFix] Cross-tab detected on history load → converting to long');
-              const options = window.CROSSTAB_OPTIONS || {};
-              const { rows: longRows } = convert(G.ROWS, detection, options);
-              window.AGG_ROWS = longRows;
-              const dateFormatConv = document.getElementById('dateFormat')?.value || 'auto';
-              window.AGG_PROFILE = _deps.profile ? _deps.profile(longRows, dateFormatConv) : (window.profile ? window.profile(longRows, dateFormatConv) : null);
-              try { _deps.updateGlobalDescControls && _deps.updateGlobalDescControls(); } catch (e) { console.warn('[History] updateGlobalDescControls (converted long) failed:', e); }
-            } else {
-              console.debug('[HistoryFix] Not cross-tab. Proceeding without AGG_ROWS.');
-            }
-          }
-        } catch (e2) {
-          console.warn('[HistoryFix] ai_chart_transformers dynamic import failed:', e2);
-        }
-      }
+      // Keep UI controls in sync with current profile
+      try { _deps.updateGlobalDescControls && _deps.updateGlobalDescControls(); } catch (e) { console.warn('[History] updateGlobalDescControls (history load) failed:', e); }
     } catch (e1) {
-      console.warn('[HistoryFix] Failed to initialize AGG_ROWS/AGG_PROFILE for history:', e1);
+      console.warn('[HistoryFix] Failed to reset AGG_ROWS/AGG_PROFILE for history:', e1);
     }
 
     G.MODE = snapshot.mode || 'auto';

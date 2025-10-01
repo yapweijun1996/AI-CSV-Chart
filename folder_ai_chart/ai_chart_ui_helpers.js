@@ -964,16 +964,19 @@ async function getAiAnalysisPlan(context) {
     // Defensive fallback for cross-tab → long pipeline:
     // If autoPlan produced 0 jobs but we have converted long rows (AGG_ROWS),
     // seed a minimal but useful plan on canonical schema.
-    const hasAggRows = Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length > 0;
-    // Prefer AGG_PROFILE columns; if missing expected long-schema names, fall back to AGG_ROWS keys
+    const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+      ? window.AGG_ROWS
+      : (Array.isArray(context.includedRows) ? context.includedRows : []);
+    // Prefer profile columns; if missing expected long-schema names, fall back to first-row keys
     let names = (context.profile?.columns || []).map(c => c.name);
     let hasValue = names.includes('Value');
     let hasPid = names.includes('ProjectId');
     let hasPname = names.includes('ProjectName');
     let hasDesc = names.includes('Description');
 
-    if (hasAggRows && (!hasValue || !hasPid || !hasPname || !hasDesc)) {
-        const row0 = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length) ? window.AGG_ROWS[0] : null;
+    // If profile does not expose canonical long columns, infer from first row of active rows
+    if (!hasValue || !hasPid || !hasPname || !hasDesc) {
+        const row0 = (Array.isArray(rowsSource) && rowsSource.length) ? rowsSource[0] : null;
         const rowNames = row0 ? Object.keys(row0) : [];
         if (!names || names.length === 0) names = rowNames;
         hasValue = hasValue || rowNames.includes('Value');
@@ -982,7 +985,7 @@ async function getAiAnalysisPlan(context) {
         hasDesc = hasDesc || rowNames.includes('Description');
     }
 
-    if ((!jobs || jobs.length === 0) && hasAggRows && hasValue) {
+    if ((!jobs || jobs.length === 0) && hasValue) {
         console.log('[Fallback] autoPlan returned 0 jobs; using canonical long-schema defaults');
         const seeded = [];
         if (hasPid)   seeded.push({ groupBy: 'ProjectId',   metric: 'Value', agg: 'sum' });
@@ -993,7 +996,7 @@ async function getAiAnalysisPlan(context) {
     }
 
     // Prefer Value as metric in long schema; demote Code/ProjectId/RawValue as metrics
-    if (hasAggRows && hasValue && Array.isArray(jobs) && jobs.length > 0) {
+    if (hasValue && Array.isArray(jobs) && jobs.length > 0) {
         const bannedMetrics = new Set(['Code','ProjectId','RawValue','CORP_EC','CORP_RE','RE','EC','EC_P','Msia','Total']);
         jobs = jobs.map(j => {
             const metric = (!j.metric || bannedMetrics.has(String(j.metric))) ? 'Value' : j.metric;
@@ -1015,7 +1018,7 @@ async function getAiAnalysisPlan(context) {
 
     // Enrich plan with filtered breakdowns for top Description categories (cross-tab long schema)
     try {
-        if (hasAggRows && hasValue && hasDesc) {
+        if (hasValue && hasDesc) {
             // Use full converted long rows for robust Top-K (context.includedRows is a tiny sample)
             const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
               ? window.AGG_ROWS
@@ -1059,7 +1062,7 @@ async function getAiAnalysisPlan(context) {
 
     // Add a Pivot template (Description × ProjectId) for long schema
     try {
-        if (hasAggRows && hasValue && hasDesc && hasPid) {
+        if (hasValue && hasDesc && hasPid) {
             const pivotJob = {
                 type: 'pivot',
                 rowsDim: 'Description',
