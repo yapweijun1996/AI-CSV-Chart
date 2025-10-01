@@ -1026,30 +1026,13 @@ $('#loadBtn').onclick = async ()=>{
       const workerDetection = window.CSV_DETECTION;
       const detection = workerDetection || detectCrossTab(ROWS);
       window.CROSSTAB_DETECTION = detection;
-      if (detection && detection.isCrossTab) {
-        const defaultOptions = {
-          idCols: ['Code','Description'],
-          labelRowIndex: detection.headerRows === 2 ? 0 : 0,
-          dataStartRow: detection.headerRows === 2 ? 1 : 1,
-          includeCols: Array.isArray(detection.projectCols) && detection.projectCols.length ? detection.projectCols : null,
-          excludeCols: []
-        };
-        window.CROSSTAB_OPTIONS = defaultOptions;
-
-        const { rows: longRows, columns } = convertCrossTabToLong(ROWS, detection, defaultOptions);
-        window.AGG_ROWS = longRows;
-        const dateFormatConv = $('#dateFormat').value;
-        window.AGG_PROFILE = profile(longRows, dateFormatConv);
-        showConvertedSection(columns, longRows);
-        showToast('Detected cross-tab format. Using converted long format for aggregation.', 'info');
-      } else {
-        window.AGG_ROWS = null;
-        window.AGG_PROFILE = null;
-        window.CROSSTAB_OPTIONS = null;
-        hideConvertedSection();
-      }
+      // Cross-tab conversion disabled: treat all inputs as long-format (no conversion).
+      window.AGG_ROWS = null;
+      window.AGG_PROFILE = null;
+      window.CROSSTAB_OPTIONS = null;
+      hideConvertedSection();
     } catch (e) {
-      console.warn('Cross-tab detect/convert failed:', e);
+      console.warn('Cross-tab detect/convert disabled (manual load):', e);
       window.AGG_ROWS = null;
       window.AGG_PROFILE = null;
       window.CROSSTAB_OPTIONS = null;
@@ -1603,30 +1586,13 @@ window.addEventListener('message', async (event) => {
           const workerDetection = window.CSV_DETECTION;
           const detection = workerDetection || detectCrossTab(ROWS);
           window.CROSSTAB_DETECTION = detection;
-          if (detection && detection.isCrossTab) {
-            const defaultOptions = {
-              idCols: ['Code','Description'],
-              labelRowIndex: detection.headerRows === 2 ? 0 : 0,
-              dataStartRow: detection.headerRows === 2 ? 1 : 1,
-              includeCols: Array.isArray(detection.projectCols) && detection.projectCols.length ? detection.projectCols : null,
-              excludeCols: []
-            };
-            window.CROSSTAB_OPTIONS = defaultOptions;
-
-            const { rows: longRows, columns } = convertCrossTabToLong(ROWS, detection, defaultOptions);
-            window.AGG_ROWS = longRows;
-            const dateFormatConv = $('#dateFormat').value || 'auto';
-            window.AGG_PROFILE = profile(longRows, dateFormatConv);
-            showConvertedSection(columns, longRows);
-            showToast('Detected cross-tab format (table stream). Using converted long format for aggregation.', 'info');
-          } else {
-            window.AGG_ROWS = null;
-            window.AGG_PROFILE = null;
-            window.CROSSTAB_OPTIONS = null;
-            hideConvertedSection();
-          }
+          // Cross-tab conversion disabled (table stream path): always use long-format as-is.
+          window.AGG_ROWS = null;
+          window.AGG_PROFILE = null;
+          window.CROSSTAB_OPTIONS = null;
+          hideConvertedSection();
         } catch (e) {
-          console.warn('Cross-tab detect/convert failed (table stream):', e);
+          console.warn('Cross-tab detect/convert disabled (table stream):', e);
           window.AGG_ROWS = null;
           window.AGG_PROFILE = null;
           window.CROSSTAB_OPTIONS = null;
