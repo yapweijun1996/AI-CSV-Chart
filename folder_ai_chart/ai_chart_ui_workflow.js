@@ -6,6 +6,8 @@ import { fetchWithRetry } from './ai_chart_api.js';
 import * as Store from './ai_chart_store.js';
 import { addMissingDataWarning, groupAgg, computeChartConfig, ensureChart, renderChartCard, renderAggTable } from './ai_chart_aggregates.js';
 import { isValidApiKey, initializeAiSettingsHandlers } from './ai_chart_ai_settings_handlers.js';
+import { applyAgentActions } from './ai_chart_agent_actions.js';
+import { buildLocalAgentPlan } from './ai_chart_ui_helpers.js';
 import { getClientContextPrompt } from './ai_chart_context.js';
 
 // Module-level state
@@ -844,9 +846,14 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
         workflowDeps.WorkflowManager.completeTask('init');
         await new Promise(resolve => setTimeout(resolve, 50));
         
-        const plan = window.autoPlan(activeProfile, includedRows, excludedDimensions);
-        workflowDeps.WorkflowManager.completeTask('analysis', 'Using non-AI fallback.');
-        workflowDeps.WorkflowManager.completeTask('ai-generation', 'Using automatic plan generation.');
+        const plan = buildLocalAgentPlan({
+            profile: activeProfile,
+            includedRows,
+            excludedDimensions,
+            maxCharts: 10
+        });
+        workflowDeps.WorkflowManager.completeTask('analysis', 'Using local intelligent analysis.');
+        workflowDeps.WorkflowManager.completeTask('ai-generation', 'Generated heuristic aggregates.');
         return plan;
     } else {
         if (window.safeReset) {
@@ -973,6 +980,49 @@ export async function runAiWorkflow(includedRows, excludedDimensions = []) {
                 }; // Include planType for proper workflow handling
                 
                 // Don't complete analysis task yet - wait until after cards are built
+            }
+
+            if (plan && Array.isArray(plan.actions) && plan.actions.length) {
+                try {
+                    const actionResult = applyAgentActions(plan.actions, {
+                        profile: activeProfile,
+                        getManualRoles: () => (typeof window.getManualRoles === 'function' ? window.getManualRoles() : (window.MANUAL_ROLES || {})),
+                        setManualRoles: (next) => {
+                            if (typeof window.setManualRoles === 'function') {
+                                window.setManualRoles(next);
+                            } else {
+                                window.MANUAL_ROLES = next || {};
+                            }
+                        },
+                        debouncedAutoSave: window.debouncedAutoSave,
+                        onRolesApplied: () => {
+                            if (typeof window.renderProfile === 'function') {
+                                try { window.renderProfile(activeProfile, window.LAST_PARSE_META); } catch (e) { console.warn('renderProfile after agent actions failed:', e); }
+                            }
+                        }
+                    });
+                    if (actionResult.changed) {
+                        console.log('[AI Agent] Applied actions', actionResult.applied);
+                        const count = Array.isArray(plan.actions) ? plan.actions.length : actionResult.applied.length;
+                        if (count) {
+                            const label = count === 1 ? 'column role adjustment' : 'column role adjustments';
+                            try {
+                                const agentId = workflowDeps.WorkflowManager.getCurrentAgentId();
+                                const completed = workflowDeps.AITasks.completeTaskByDescription(agentId, `Applying ${count} ${label}`);
+                                if (!completed) {
+                                    console.log('⚠️ AI Agent role task not found for completion (possibly reset)');
+                                }
+                            } catch (err) {
+                                console.log('⚠️ Failed to mark role action task complete:', err);
+                            }
+                        }
+                    }
+                    if (actionResult.rejected && actionResult.rejected.length) {
+                        console.warn('[AI Agent] Rejected actions', actionResult.rejected);
+                    }
+                } catch (e) {
+                    console.warn('Failed to apply AI agent actions:', e);
+                }
             }
 
             window.CURRENT_PLAN = plan;

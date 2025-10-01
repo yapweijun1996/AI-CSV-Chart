@@ -8,6 +8,7 @@ import { getErpAnalysisPriority } from './ai_chart_erp_logic.js';
 import { applyMasonryLayout } from './ai_chart_masonry.js';
 import { renderExplanationCard, generateExplanation, runAiWorkflow, checkAndGenerateAISummary, updateAiTodoList } from './ai_chart_ui_workflow.js';
 import { toNum } from './ai_chart_utils.js';
+import { normalizeAgentActions } from './ai_chart_agent_actions.js';
 
 // Helper functions extracted from ai_chart_ui.js
 // This file contains the largest, most complex functions dealing with DOM manipulation and AI integration
@@ -211,6 +212,112 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
   }
 
   return extras;
+}
+
+export function buildLocalAgentPlan(context) {
+  const profile = context.profile;
+  const includedRows = Array.isArray(context.includedRows) ? context.includedRows : [];
+  const excludedDimensions = context.excludedDimensions || [];
+  const maxCharts = Number(context.maxCharts) || 10;
+
+  const basePlan = autoPlan(profile, includedRows, excludedDimensions) || { jobs: [] };
+  const baseJobs = Array.isArray(basePlan.jobs) ? basePlan.jobs : [];
+
+  const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+    ? window.AGG_ROWS
+    : includedRows;
+
+  const enhancements = buildLongFormatEnhancements(profile, rowsSource, {
+    metricKey: 'Value',
+    rowEstimate: profile?.rowCount || rowsSource.length || includedRows.length
+  });
+
+  let jobs = deduplicateJobs([
+    ...baseJobs,
+    ...(enhancements.topKJobs || []),
+    ...(enhancements.pivotJob ? [enhancements.pivotJob] : [])
+  ]).slice(0, maxCharts);
+
+  if (!jobs.length && Array.isArray(profile?.columns)) {
+    const firstDim = profile.columns.find(c => c.type !== 'number');
+    const firstMetric = profile.columns.find(c => c.type === 'number');
+    if (firstDim && firstMetric) {
+      jobs = [{ groupBy: firstDim.name, metric: firstMetric.name, agg: 'sum' }];
+    }
+  }
+
+  const columnMap = new Map();
+  if (Array.isArray(profile?.columns)) {
+    profile.columns.forEach(col => {
+      columnMap.set(col.name, col);
+      columnMap.set(String(col.name || '').toLowerCase(), col);
+    });
+  }
+
+  const rolePriority = new Map([
+    ['metric', 4],
+    ['date', 3],
+    ['dimension', 2],
+    ['id', 2],
+    ['ignore', 1]
+  ]);
+
+  const requestedRoles = new Map();
+
+  const requestRole = (colName, role) => {
+    if (!colName || !role) return;
+    const meta = columnMap.get(colName) || columnMap.get(String(colName).toLowerCase());
+    if (!meta) return;
+    let canonical = role;
+    if (role === 'dimension' && meta.type === 'date') {
+      canonical = 'date';
+    }
+    const current = requestedRoles.get(meta.name);
+    const nextPriority = rolePriority.get(canonical) || 0;
+    const currentPriority = current ? (rolePriority.get(current.role) || 0) : -1;
+    if (!current || nextPriority >= currentPriority) {
+      requestedRoles.set(meta.name, { role: canonical, source: role });
+    }
+  };
+
+  jobs.forEach(job => {
+    if (!job || typeof job !== 'object') return;
+    if (job.type === 'pivot') {
+      if (job.rowsDim) requestRole(job.rowsDim, 'dimension');
+      if (job.colsDim) requestRole(job.colsDim, 'dimension');
+      if (job.metric) requestRole(job.metric, 'metric');
+      return;
+    }
+    if (job.groupBy) {
+      const meta = columnMap.get(job.groupBy) || columnMap.get(String(job.groupBy).toLowerCase());
+      if (meta && meta.type === 'date') {
+        requestRole(meta.name, 'date');
+      } else {
+        requestRole(job.groupBy, job.dateBucket ? 'date' : 'dimension');
+      }
+    }
+    if (job.metric) {
+      requestRole(job.metric, 'metric');
+    }
+  });
+
+  const plannedActions = Array.from(requestedRoles.entries()).map(([column, payload]) => ({
+    type: 'setRole',
+    column,
+    role: payload.role
+  }));
+
+  const { normalized: actions, rejected } = normalizeAgentActions(plannedActions, { profile });
+  if (rejected.length) {
+    console.warn('[LocalPlan] Rejected actions from heuristics:', rejected);
+  }
+
+  return {
+    jobs,
+    actions,
+    planType: 'local-intelligent',
+    reasoning: 'Local heuristics: autoPlan + long-format enhancements applied.'
+  };
 }
 
 /**
@@ -1382,7 +1489,16 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
             aiPlan.jobs = normalizedJobs;
             __validJobsCount = normalizedJobs.length;
 
-            console.log('[Debug] AI Generated Plan:', JSON.stringify(aiPlan, null, 2));
+            const { normalized: agentActions, rejected: actionRejects } = normalizeAgentActions(aiPlan.actions || [], context);
+            if (actionRejects.length) {
+                console.warn('[Debug] AI plan actions rejected:', actionRejects);
+            }
+            aiPlan.actions = agentActions;
+
+            console.log('[Debug] AI Generated Plan:', JSON.stringify({
+                ...aiPlan,
+                actions: agentActions
+            }, null, 2));
             
             // Build additional Top-K Description filtered jobs (cross-tab → long) as reinforcement
             let additionalJobs = [];
@@ -1428,7 +1544,8 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
                     auto: Array.isArray(fallbackPlan.jobs) ? fallbackPlan.jobs.length : 0,
                     desc: additionalJobs.length,
                     merged: mergedJobs.length,
-                    final: limitedJobs.length
+                    final: limitedJobs.length,
+                    actions: agentActions.length
                 };
                 if (window.WorkflowManager && typeof window.WorkflowManager.updateCurrentTaskMessage === 'function') {
                     const s = window.__AI_PLAN_STATS;
@@ -1439,6 +1556,14 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
             } catch (e) { console.warn('Failed to update AI plan stats:', e); }
 
             const workflowTasks = [];
+            if (agentActions.length) {
+                const label = agentActions.length === 1 ? 'column role adjustment' : 'column role adjustments';
+                workflowTasks.push({
+                    description: `Applying ${agentActions.length} ${label}`,
+                    type: 'configure-columns',
+                    actionCount: agentActions.length
+                });
+            }
             
             // Add chart generation tasks
             limitedJobs.forEach((job, index) => {
@@ -1502,6 +1627,7 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
             return {
                 tasks: workflowTasks,
                 jobs: limitedJobs,
+                actions: agentActions,
                 planType: aiPlan.planType || 'intelligent-analysis',
                 reasoning: aiPlan.reasoning
             };
@@ -1528,12 +1654,14 @@ Focus on creating meaningful business insights. Prioritize aggregations that wil
     }
 }
 
-async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], fallbackDepth = 0, retry = false) {
+async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], fallbackDepth = 0, retry = false, options = {}) {
     if (!ROWS()) return showToast('Load a CSV first.', 'error');
     // Ensure AI Chat has access to the latest dataset
     if (!window.currentData || window.currentData.length === 0) {
         window.currentData = ROWS();
     }
+
+    const preserveExisting = Boolean(options && options.preserveExisting);
 
      // Enhanced concurrent execution prevention
     if (window.window.isRenderingAggregates && !retry && MODE() !== 'manual') {
@@ -1574,9 +1702,15 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
         }
         
         // Always clear the grid when starting fresh (not a retry)
+        let existingKeys = new Set();
         if (!retry) {
-            console.log('🧹 Clearing existing aggregates');
-            grid.innerHTML = '';
+            if (preserveExisting) {
+                console.log('🛟 Preserving existing aggregates while adding new ones');
+                existingKeys = new Set(Array.from(grid.querySelectorAll('.card')).map(card => card.dataset.canonicalKey || ''));
+            } else {
+                console.log('🧹 Clearing existing aggregates');
+                grid.innerHTML = '';
+            }
         }
 
         if (chartsSnapshot && chartsSnapshot.length > 0) {
@@ -1597,15 +1731,47 @@ async function renderAggregates(chartsSnapshot = null, excludedDimensions = [], 
                 const aggregationSessionId = `agg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
                 window.currentAggregationSession = aggregationSessionId;
                 console.log(`🆔 Starting aggregation session: ${aggregationSessionId}`);
-                
+
                 // Use canonical deduplication (more robust than manual dedup)
                 const uniqueJobs = deduplicateJobs(plan.jobs);
                 if (uniqueJobs.length !== plan.jobs.length) {
                     plan.jobs = uniqueJobs;
                 }
-                
+
+                if (preserveExisting && existingKeys.size) {
+                    const skipped = [];
+                    plan.jobs = plan.jobs.filter(job => {
+                        const key = canonicalJobKey(job);
+                        if (!key) return true;
+                        if (existingKeys.has(key)) {
+                            skipped.push({ job, key });
+                            return false;
+                        }
+                        return true;
+                    });
+                    if (skipped.length) {
+                        console.log(`🪄 Preserved ${skipped.length} existing aggregate(s) during mode switch.`);
+                        if (MODE() === 'ai_agent' && plan.planType === 'intelligent-analysis' && AITasks && WorkflowManager && typeof WorkflowManager.getCurrentAgentId === 'function') {
+                            skipped.forEach(({ job }) => {
+                                try {
+                                    const chartTaskDescription = `Building ${job.agg === 'count' ? 'bar chart' : (job.agg === 'sum' || job.agg === 'avg' ? 'bar chart' : 'data table')}: ${job.agg}(${job.metric}) by ${job.groupBy}`;
+                                    const agentId = WorkflowManager.getCurrentAgentId();
+                                    AITasks.completeTaskByDescription(agentId, chartTaskDescription);
+                                    const explanationTaskDescription = `Generating AI explanation for ${job.groupBy} analysis`;
+                                    AITasks.completeTaskByDescription(agentId, explanationTaskDescription);
+                                } catch (e) {
+                                    console.log('⚠️ Failed to auto-complete preserved job tasks:', e.message);
+                                }
+                            });
+                        }
+                    }
+                    if (!plan.jobs.length) {
+                        console.log('ℹ️ No new aggregates required after preservation.');
+                    }
+                }
+
                 const explanationQueue = [];
-                
+
                 const processJobsIncrementally = async () => {
                     for (let i = 0; i < plan.jobs.length; i++) {
                         const job = plan.jobs[i];

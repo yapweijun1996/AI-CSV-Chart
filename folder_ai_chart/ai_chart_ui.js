@@ -500,6 +500,19 @@ let MODE = 'auto';
 window.MODE = MODE;
 let MANUAL_ROLES = {};   // { colName: 'dimension'|'metric'|'date'|'id'|'ignore' }
 let MANUAL_JOBS  = [];   // [{groupBy, metric, agg, chart, topN, dateBucket?}]
+
+function setManualRoles(next) {
+  MANUAL_ROLES = next ? { ...next } : {};
+  window.MANUAL_ROLES = MANUAL_ROLES;
+}
+
+function getManualRoles() {
+  return MANUAL_ROLES;
+}
+
+setManualRoles(MANUAL_ROLES);
+window.setManualRoles = setManualRoles;
+window.getManualRoles = getManualRoles;
 let CURRENCY_TOKENS = ['MYR','RM','Malaysian Ringgit','USD','US Dollar','SGD','SG Dollar','EUR','Euro','GBP','British Pound','JPY','Japanese Yen','CNY','Chinese Yuan','AUD','Australian Dollar','CAD','Canadian Dollar','CHF','Swiss Franc','HKD','Hong Kong Dollar','INR','Indian Rupee','KRW','South Korean Won','THB','Thai Baht','VND','Vietnamese Dong','PHP','Philippine Peso','IDR','Indonesian Rupiah'];
 const CURRENCY_COLUMN_HINTS = ['ccy', 'currency', 'cur', 'curr'];
 
@@ -532,7 +545,7 @@ function loadState(){
     const s = JSON.parse(raw);
     if (s.key && s.key === signatureFromHeaders()){
       MODE = s.MODE || MODE;
-      MANUAL_ROLES = s.MANUAL_ROLES || {};
+      setManualRoles(s.MANUAL_ROLES || {});
       MANUAL_JOBS = s.MANUAL_JOBS || [];
       AUTO_EXCLUDE = (typeof s.AUTO_EXCLUDE === 'boolean') ? s.AUTO_EXCLUDE : true;
       if (Array.isArray(s.CURRENCY_TOKENS) && s.CURRENCY_TOKENS.length > 0) {
@@ -847,8 +860,9 @@ $('#closeRoleModal').onclick = ()=>{
   try { document.getElementById('editRolesBtn')?.focus(); } catch {}
 };
 $('#saveRoles').onclick = ()=>{
-  MANUAL_ROLES = {};
-  $('#roleTBody').querySelectorAll('select').forEach(sel=>{ MANUAL_ROLES[ sel.getAttribute('data-col') ] = sel.value; });
+  const nextRoles = {};
+  $('#roleTBody').querySelectorAll('select').forEach(sel=>{ nextRoles[ sel.getAttribute('data-col') ] = sel.value; });
+  setManualRoles(nextRoles);
   $('#roleModal').classList.remove('open');
   renderAggregates();
   showToast('Column roles saved.', 'success');
@@ -1086,7 +1100,7 @@ $('#loadBtn').onclick = async ()=>{
     applyFilter(); renderRawBody();
     // Refresh global Description controls after new CSV has been loaded
     try { updateGlobalDescControls(); } catch (e) { console.warn('updateGlobalDescControls (manual load) failed:', e); }
-    MANUAL_ROLES = {}; MANUAL_JOBS = [];
+    setManualRoles({}); MANUAL_JOBS = [];
     const smart = getDefaultMode();
     $('#mode').value = smart;
     switchMode(smart);
@@ -1179,7 +1193,10 @@ function switchMode(val){
   if (editBtn) editBtn.disabled = manual && !hasProfile;
   if (addBtn) addBtn.disabled = manual && !hasProfile;
 }
-$('#mode').addEventListener('change', e=>{ switchMode(e.target.value); renderAggregates(); });
+$('#mode').addEventListener('change', e=>{
+  switchMode(e.target.value);
+  renderAggregates(null, [], 0, false, { preserveExisting: true });
+});
 $('#dateFormat').addEventListener('change', ()=>{
   if (ROWS) {
     const dateFormat = $('#dateFormat').value;
@@ -1204,7 +1221,13 @@ $('#autoExclude').addEventListener('change', e => {
 });
 $('#editRolesBtn').onclick = openRoleEditor;
 $('#addAggBtn').onclick = openAddAgg;
-$('#clearManualBtn').onclick = ()=>{ MANUAL_ROLES={}; MANUAL_JOBS=[]; renderAggregates(); showToast('Manual overrides cleared.', 'info'); debouncedAutoSave(); };
+$('#clearManualBtn').onclick = ()=>{
+  setManualRoles({});
+  MANUAL_JOBS=[];
+  renderAggregates();
+  showToast('Manual overrides cleared.', 'info');
+  debouncedAutoSave();
+};
 $('#recalcBtn').onclick = ()=>{ renderAggregates(); showToast('Recalculated with current roles', 'success'); debouncedAutoSave(); };
 
 $('#searchInput').addEventListener('input', onSearch);
@@ -1633,7 +1656,7 @@ window.addEventListener('message', async (event) => {
         console.log('✅ Raw Data table rendered');
         
         // Reset manual overrides (same as loadBtn)
-        MANUAL_ROLES = {}; 
+        setManualRoles({});
         MANUAL_JOBS = [];
         const smart = getDefaultMode();
         $('#mode').value = smart;
