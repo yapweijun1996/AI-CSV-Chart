@@ -39,9 +39,19 @@ function isLikelyNonDataRow(row, index) {
     /^\s*\(\s*[A-Za-z]{2,4}\s*\)\s*total(s)?\b/i,      // "(SGD) Total"
     /(合计|小计|总计|總計|合計|小計|总數|總數)/i        // Chinese variants
   ];
+  const subtotalTokenPatterns = [/^>>\s*(sub[-\s]*total|total)$/i, />\s*(sub[-\s]*total|total)\b/i];
+  const unitTokens = new Set(['EA','PCS','PC','QTY','UNITS','UNIT','SET','SETS','LOT','LOTS','BOX','BAG','CTN','CARTON','KG','G','GRAM','L','ML','PACK','PAIR','ROLL']);
+
   let matchedTotalValue = null;
+  let subtotalTokenCount = 0;
   for (const v of values) {
-    if (totalPatterns.some(p => p.test(String(v)))) { matchedTotalValue = v; break; }
+    const stringVal = String(v);
+    if (totalPatterns.some(p => p.test(stringVal))) {
+      matchedTotalValue = v;
+    }
+    if (subtotalTokenPatterns.some(p => p.test(stringVal))) {
+      subtotalTokenCount++;
+    }
   }
 
   // Access global variables from main ui
@@ -64,6 +74,7 @@ function isLikelyNonDataRow(row, index) {
   let currencyInfo = null;
   let firstNonEmptyIndex = -1;
   let firstNonEmptyValue = '';
+  let unitCount = 0;
 
   values.forEach((val, i) => {
     const s = String(val || '').trim();
@@ -86,6 +97,8 @@ function isLikelyNonDataRow(row, index) {
       }
     } else if (metricPatterns.test(lowerVal)) {
       metricCount++;
+    } else if (unitTokens.has(s.toUpperCase())) {
+      unitCount++;
     } else {
       const n = toNum(s.replace(/\s+/g, ''));
       if (Number.isFinite(n) && String(n) !== '0') {
@@ -113,6 +126,8 @@ function isLikelyNonDataRow(row, index) {
   if (hasAllCapsTotal) return { result: true, reason: 'Contains ALL CAPS total keywords' };
   if (isSeparator) return { result: true, reason: 'Appears to be a separator row' };
 
+  const hasSubtotalToken = subtotalTokenCount > 0 || Boolean(matchedTotalValue);
+
   // Heuristic A: first cell looks like total + numeric heavy row
   const firstIsTotalish = (() => {
     const s = String(firstNonEmptyValue || '').toLowerCase();
@@ -134,13 +149,25 @@ function isLikelyNonDataRow(row, index) {
     return { result: true, reason: `Contains total keyword: "${matchedTotalValue}"` };
   }
 
+  if (hasSubtotalToken && numberCount >= 1) {
+    const structuralCount = numberCount + currencyCount + unitCount + metricCount + subtotalTokenCount;
+    const structuralRatio = structuralCount / Math.max(1, nonEmptyCount);
+    if (structuralRatio >= 0.75) {
+      return { result: true, reason: `Subtotal/Total row (${(structuralRatio*100).toFixed(0)}% structural tokens)` };
+    }
+  }
+
   return { result: false, reason: '' };
 }
 
 // Initialize row inclusion array with smart defaults
 function initializeRowInclusion() {
   const ROWS = window.ROWS;
-  if (!ROWS) return;
+  if (!ROWS) {
+    const summaryEl = document.getElementById('exclusionSummary');
+    if (summaryEl) summaryEl.textContent = '';
+    return;
+  }
   
   window.ROW_EXCLUSION_REASONS = {};
   const AUTO_EXCLUDE = window.AUTO_EXCLUDE;
@@ -161,6 +188,27 @@ function initializeRowInclusion() {
     return !exclusion.result;
   });
   
+  const reasonCounts = {};
+  Object.values(window.ROW_EXCLUSION_REASONS).forEach(reason => {
+    if (!reason) return;
+    reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+  });
+  window.ROW_EXCLUSION_SUMMARY = reasonCounts;
+
+  const summaryEl = document.getElementById('exclusionSummary');
+  if (summaryEl) {
+    if (excludedCount === 0) {
+      summaryEl.textContent = 'Auto-exclude kept all rows.';
+    } else {
+      const topReasons = Object.entries(reasonCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([reason, count]) => `${count}× ${reason}`);
+      const detail = topReasons.length ? ` (${topReasons.join('; ')})` : '';
+      summaryEl.textContent = `Auto-excluded ${excludedCount} rows${detail}.`;
+    }
+  }
+
   const message = `Auto-excluded ${excludedCount} rows.`;
   console.log(`🔍 ${message}`);
   showToast(message, 'info');

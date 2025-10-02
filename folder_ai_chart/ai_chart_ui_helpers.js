@@ -138,18 +138,92 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
     return extras;
   }
 
-  const actualMetric = findColumnCaseInsensitive(columnNames, metricKey)
+  const columnMetaByName = new Map();
+  const columnMetaByLower = new Map();
+  profileCols.forEach(col => {
+    const key = String(col.name || '');
+    columnMetaByName.set(key, col);
+    columnMetaByLower.set(key.toLowerCase(), col);
+  });
+
+  let actualMetric = findColumnCaseInsensitive(columnNames, metricKey)
     || detectColumnByKeyword(columnNames, metricKey)
     || detectMetricColumn(columnNames);
-  const actualDesc = findColumnCaseInsensitive(columnNames, descriptionKey)
+  let metricFallback = false;
+  if (!actualMetric) {
+    const numericCandidates = profileCols
+      .filter(col => col && col.type === 'number')
+      .sort((a, b) => (Number(b.completeness ?? 0) - Number(a.completeness ?? 0)) || (Number(b.unique ?? 0) - Number(a.unique ?? 0)));
+    if (numericCandidates.length) {
+      actualMetric = numericCandidates[0].name;
+      metricFallback = true;
+    }
+  }
+
+  const pickDimensionCandidate = (exclude = new Set(), options = {}) => {
+    const preferCurrency = Boolean(options.preferCurrency);
+    const candidates = profileCols.filter(col => {
+      if (!col) return false;
+      const name = String(col.name || '');
+      if (!name || exclude.has(name)) return false;
+      if (col.type !== 'string') return false;
+      const unique = Number(col.unique ?? 0);
+      if (!Number.isFinite(unique) || unique <= 1 || unique > 600) return false;
+      const completenessVal = Number(col.completeness ?? 0);
+      if (completenessVal < 0.25) return false;
+      if (col.placeholderName && col.hint !== 'currencyToken' && col.hint !== 'shortCode') return false;
+      if (col.hint === 'unitToken' && completenessVal < 0.9) return false;
+      return true;
+    });
+    if (!candidates.length) return null;
+
+    const dimensionScore = (col) => {
+      const completenessVal = Number(col.completeness ?? 0);
+      const unique = Number(col.unique ?? 0);
+      let score = (completenessVal * 1.5) + Math.min(unique, 80) / 80;
+      if (col.hint === 'currencyToken') score += preferCurrency ? 0.7 : 0.2;
+      if (col.hint === 'unitToken') score -= 0.8;
+      if (col.placeholderName && col.hint !== 'currencyToken' && col.hint !== 'shortCode') score -= 0.6;
+      return score;
+    };
+
+    candidates.sort((a, b) => dimensionScore(b) - dimensionScore(a));
+    return candidates[0] || null;
+  };
+
+  let actualDesc = findColumnCaseInsensitive(columnNames, descriptionKey)
     || detectColumnByKeyword(columnNames, 'description');
-  const actualGroup = findColumnCaseInsensitive(columnNames, secondaryGroupKey)
+  let descFallback = false;
+  if (!actualDesc) {
+    const descCandidate = pickDimensionCandidate();
+    if (descCandidate) {
+      actualDesc = descCandidate.name;
+      descFallback = true;
+    }
+  }
+
+  const usedNames = new Set(actualDesc ? [actualDesc] : []);
+  let actualGroup = findColumnCaseInsensitive(columnNames, secondaryGroupKey)
     || detectProjectColumn(columnNames);
+  if (actualGroup && actualDesc && String(actualGroup).toLowerCase() === String(actualDesc).toLowerCase()) {
+    actualGroup = null;
+  }
+  let groupFallback = false;
+  if (!actualGroup) {
+    const groupCandidate = pickDimensionCandidate(usedNames, { preferCurrency: true });
+    if (groupCandidate) {
+      actualGroup = groupCandidate.name;
+      groupFallback = true;
+    }
+  }
 
   extras.meta = {
     metricName: actualMetric,
     descriptionName: actualDesc,
-    secondaryGroupName: actualGroup
+    secondaryGroupName: actualGroup,
+    metricFallback,
+    descriptionFallback: descFallback,
+    groupFallback
   };
 
   if (!actualMetric || !actualDesc) {
@@ -184,8 +258,8 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
   }
 
   if (actualGroup) {
-    const descMeta = profileCols.find(c => String(c.name).toLowerCase() === String(actualDesc).toLowerCase());
-    const groupMeta = profileCols.find(c => String(c.name).toLowerCase() === String(actualGroup).toLowerCase());
+    const descMeta = actualDesc ? (columnMetaByLower.get(String(actualDesc).toLowerCase()) || columnMetaByName.get(actualDesc)) : null;
+    const groupMeta = actualGroup ? (columnMetaByLower.get(String(actualGroup).toLowerCase()) || columnMetaByName.get(actualGroup)) : null;
     const descUnique = Number(descMeta?.unique ?? 0);
     const groupUnique = Number(groupMeta?.unique ?? 0);
     const rowEstimate = explicitRowEstimate ?? profile?.rowCount ?? rows.length;
@@ -216,6 +290,7 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
 
 export function buildLocalAgentPlan(context) {
   const profile = context.profile;
+  const profileCols = Array.isArray(profile?.columns) ? profile.columns : [];
   const includedRows = Array.isArray(context.includedRows) ? context.includedRows : [];
   const excludedDimensions = context.excludedDimensions || [];
   const maxCharts = Number(context.maxCharts) || 10;
@@ -237,6 +312,25 @@ export function buildLocalAgentPlan(context) {
     ...(enhancements.topKJobs || []),
     ...(enhancements.pivotJob ? [enhancements.pivotJob] : [])
   ]).slice(0, maxCharts);
+
+  const metricNameForCurrency = enhancements.meta?.metricName
+    || baseJobs.find(job => job && job.metric)?.metric
+    || (profileCols.find(col => col.type === 'number')?.name);
+
+  const currencyCandidate = profileCols.find(col => col && col.hint === 'currencyToken' && Number(col.unique ?? 0) > 1 && Number(col.completeness ?? 0) >= 0.3);
+  if (currencyCandidate && metricNameForCurrency) {
+    const hasCurrencyJob = jobs.some(job => job && job.groupBy === currencyCandidate.name && (job.metric || '') === metricNameForCurrency);
+    if (!hasCurrencyJob) {
+      const currencyJob = {
+        groupBy: currencyCandidate.name,
+        metric: metricNameForCurrency,
+        agg: 'sum',
+        category: 'currency',
+        priority: 'low'
+      };
+      jobs = deduplicateJobs([currencyJob, ...jobs]).slice(0, maxCharts);
+    }
+  }
 
   if (!jobs.length && Array.isArray(profile?.columns)) {
     const firstDim = profile.columns.find(c => c.type !== 'number');
@@ -316,7 +410,11 @@ export function buildLocalAgentPlan(context) {
     jobs,
     actions,
     planType: 'local-intelligent',
-    reasoning: 'Local heuristics: autoPlan + long-format enhancements applied.'
+    reasoning: 'Local heuristics: autoPlan + long-format enhancements applied.',
+    meta: {
+      currencyColumn: currencyCandidate ? currencyCandidate.name : null,
+      metric: metricNameForCurrency
+    }
   };
 }
 

@@ -1,4 +1,36 @@
 import { isNum, parseDateSafe } from './ai_chart_utils.js';
+
+const DEFAULT_CURRENCY_TOKENS = new Set(['USD','US DOLLAR','SGD','MYR','RM','EUR','GBP','JPY','CNY','RMB','AUD','CAD','CHF','HKD','INR','KRW','THB','VND','PHP','IDR','TWD','AED','SAR','NZD','ZAR','SEK','NOK','DKK','PLN','TRY','MXN','BRL']);
+const CURRENCY_SYMBOLS = new Set(['$', '€', '£', '¥', '₩', '₹', '₱', '฿']);
+const KNOWN_UNIT_TOKENS = new Set(['EA','PCS','PC','QTY','UNIT','UNITS','SET','SETS','LOT','LOTS','BOX','BAG','CTN','CARTON','KG','G','GRAM','L','ML','PACK','PAIR','ROLL']);
+const PLACEHOLDER_NAME_REGEX = /^(_+\d*|col(?:umn)?\s*\d+|unnamed[:]?\s*\d*)$/i;
+
+function isPlaceholderColumnName(name) {
+  if (name == null) return true;
+  const trimmed = String(name).trim();
+  if (!trimmed) return true;
+  return PLACEHOLDER_NAME_REGEX.test(trimmed);
+}
+
+function detectValueHint(nonEmptyValues = []) {
+  if (!Array.isArray(nonEmptyValues) || nonEmptyValues.length === 0) return 'empty';
+  const trimmed = nonEmptyValues.map(v => String(v).trim()).filter(Boolean);
+  if (!trimmed.length) return 'empty';
+  const upper = trimmed.map(v => v.toUpperCase());
+
+  const allCurrencyTokens = upper.every(v => DEFAULT_CURRENCY_TOKENS.has(v)) ||
+    trimmed.every(v => (/^[A-Z]{2,4}$/.test(v) && v === v.toUpperCase()) || CURRENCY_SYMBOLS.has(v));
+  if (allCurrencyTokens && new Set(upper).size <= 12) return 'currencyToken';
+
+  const allUnitTokens = upper.every(v => KNOWN_UNIT_TOKENS.has(v));
+  if (allUnitTokens) return 'unitToken';
+
+  if (trimmed.every(v => /^[A-Z]{1,3}$/.test(v)) && new Set(upper).size <= 25) {
+    return 'shortCode';
+  }
+
+  return 'textual';
+}
 /* ========= profiling ========= */
 export function inferType(v, dateFormat = 'auto'){
   if (v==null || v==='') return 'empty';
@@ -35,15 +67,24 @@ export function profile(rows, dateFormat = 'auto'){
         schemaEl.appendChild(warning);
       }
     }
-    const uniq = new Set(vals.filter(x=>x!=null&&x!=='').map(String)).size;
-    const samples = vals.filter(x=>x!=null&&x!=='').slice(0,3).map(String);
+    const nonEmptyVals = vals.filter(x=>x!=null&&x!=='');
+    const uniq = new Set(nonEmptyVals.map(String)).size;
+    const samples = nonEmptyVals.slice(0,3).map(String);
     const completeness = sample.length > 0 ? (sample.length - counts.empty) / sample.length : 0;
-    return { name, type, unique: uniq, samples, completeness };
+    const placeholderName = isPlaceholderColumnName(name);
+    const hint = detectValueHint(nonEmptyVals);
+    return { name, type, unique: uniq, samples, completeness, placeholderName, hint };
   });
   return { columns: out, rowCount: rows.length };
 }
 export function renderProfile(p, LAST_PARSE_META){
-  const lines = p.columns.map(c=>`${c.name} — ${c.type} · unique=${c.unique} · samples=[${c.samples.join(', ')}]`);
+  const lines = p.columns.map(c=>{
+    const extras = [];
+    if (c.placeholderName) extras.push('placeholder');
+    if (c.hint && c.hint !== 'textual' && c.hint !== 'empty') extras.push(`hint=${c.hint}`);
+    const suffix = extras.length ? ` (${extras.join(', ')})` : '';
+    return `${c.name} — ${c.type} · unique=${c.unique} · samples=[${c.samples.join(', ')}]${suffix}`;
+  });
   const meta = LAST_PARSE_META ? `\nmeta: delimiter="${LAST_PARSE_META.delimiter}" linebreak="${LAST_PARSE_META.linebreak}"` : '';
   document.querySelector('#schema').textContent = `rows=${p.rowCount}\n` + lines.join('\n') + meta;
 }
@@ -147,7 +188,65 @@ export function inferRole(col, profile, rows) {
   const cardinalityLimitRatio = Number(document.querySelector('#cardinalityLimitRatio').value) || 0.5;
   const cardinalityAbsoluteLimit = Number(document.querySelector('#cardinalityAbsoluteLimit').value) || 100;
   const isUnsuitable = (completeness < completenessThreshold) || (uniq > cardinalityAbsoluteLimit && uniqRatio > cardinalityLimitRatio);
-  
+  const placeholderName = Boolean(col.placeholderName) || isPlaceholderColumnName(name);
+  const valueHint = col.hint || 'textual';
+
+  if (placeholderName) {
+    if (type === 'number') {
+      return {
+        role: 'metric:strong',
+        category: 'general',
+        priority: 'low',
+        placeholder: true,
+        unsuitable: completeness < completenessThreshold,
+        completeness,
+        cardinality: uniq
+      };
+    }
+
+    if (valueHint === 'currencyToken') {
+      return {
+        role: 'dimension',
+        category: 'currency',
+        priority: 'low',
+        unsuitable: uniq <= 1 || completeness < 0.2,
+        completeness,
+        cardinality: uniq
+      };
+    }
+
+    if (valueHint === 'unitToken') {
+      return {
+        role: 'dimension',
+        category: 'unit',
+        priority: 'low',
+        unsuitable: true,
+        completeness,
+        cardinality: uniq
+      };
+    }
+
+    if (valueHint === 'empty' || uniq === 0 || completeness < 0.05) {
+      return {
+        role: 'ignore',
+        category: 'empty',
+        priority: 'low',
+        unsuitable: true,
+        completeness,
+        cardinality: uniq
+      };
+    }
+
+    return {
+      role: 'dimension',
+      category: 'general',
+      priority: 'low',
+      unsuitable: true,
+      completeness,
+      cardinality: uniq
+    };
+  }
+
   // Enhanced pattern matching with priority scoring
   const patterns = {
     financial: NAME_PATTERNS.financial.test(name),
