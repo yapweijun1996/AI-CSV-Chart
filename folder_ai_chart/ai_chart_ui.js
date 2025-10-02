@@ -621,8 +621,26 @@ function autoPlan(profile, rows, excludedDimensions = []) {
   }
   
   // Enhanced role categorization with business intelligence
-  const dims = roles.filter(x => x.role==='dimension' && !x.unsuitable).map(x => ({ ...x, col: x.col }))
-    .sort((a, b) => b.completeness - a.completeness || a.cardinality - b.cardinality);
+  const dimensionCompletenessMin = 0.75;
+  const dimensionUniqueMax = 120;
+  const dims = roles
+    .filter(x => x.role==='dimension' && !x.unsuitable)
+    .map(x => ({ ...x, col: x.col }))
+    .filter(d => {
+      const name = String((d.col && d.col.name) || '').trim();
+      const completeness = Number(d.col.completeness ?? d.completeness ?? 0);
+      const unique = Number(d.col.unique ?? d.cardinality ?? 0);
+      if (completeness && completeness < dimensionCompletenessMin) return false;
+      if (unique && unique > dimensionUniqueMax) return false;
+      if (/^_+\d*/.test(name) && d.col.hint !== 'currencyToken') return false;
+      if (d.col.hint === 'unitToken') return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const compDiff = (b.completeness ?? Number(b.col.completeness ?? 0)) - (a.completeness ?? Number(a.col.completeness ?? 0));
+      if (Math.abs(compDiff) > 0.05) return compDiff;
+      return (a.cardinality ?? Number(a.col.unique ?? 0)) - (b.cardinality ?? Number(b.col.unique ?? 0));
+    });
   const dates = roles.filter(x => x.role==='date' && !x.unsuitable && x.completeness > 0.2).map(x => ({ ...x, col: x.col }))
     .sort((a, b) => b.completeness - a.completeness);
   const metricsStrong = roles.filter(x => x.role==='metric:strong').map(x => ({ ...x, col: x.col }));
@@ -694,12 +712,33 @@ function autoPlan(profile, rows, excludedDimensions = []) {
 
   const limitedDims = [];
   const seenDimNames = new Set();
+  const categoryUseLimits = new Map([
+    ['code', 1],
+    ['hierarchy', 1],
+    ['status', 2],
+    ['general', 2],
+    ['location', 1]
+  ]);
+  const categoryCounts = new Map();
   for (const dim of prioritizedDims) {
-    const name = dim?.col?.name;
+    const name = String(dim?.col?.name || '').trim();
     if (!name || seenDimNames.has(name)) continue;
+    const completeness = Number(dim?.col?.completeness ?? dim.completeness ?? 0);
+    const unique = Number(dim?.col?.unique ?? dim.cardinality ?? 0);
+    if (completeness && completeness < dimensionCompletenessMin) continue;
+    if (unique && unique > dimensionUniqueMax) continue;
+    const cat = dim.category || 'general';
+    const maxPerCat = categoryUseLimits.get(cat) ?? 2;
+    const used = categoryCounts.get(cat) || 0;
+    if (used >= maxPerCat) continue;
     limitedDims.push(dim);
     seenDimNames.add(name);
+    categoryCounts.set(cat, used + 1);
     if (limitedDims.length >= 4) break; // keep auto mode tidy but allow more coverage for long tables
+  }
+
+  if (limitedDims.length === 0 && dims.length) {
+    limitedDims.push(dims[0]);
   }
 
   limitedDims.forEach(d => {

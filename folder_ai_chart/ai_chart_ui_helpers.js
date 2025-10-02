@@ -130,7 +130,7 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
     rowEstimate: explicitRowEstimate
   } = options;
 
-  const extras = { topKJobs: [], pivotJob: null, meta: {} };
+  const extras = { topKJobs: [], supplementalJobs: [], pivotJob: null, meta: {} };
   const profileCols = Array.isArray(profile?.columns) ? profile.columns : [];
   const columnNames = profileCols.map(c => c.name);
   const rows = sanitizeRows(rowsSource);
@@ -162,17 +162,21 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
 
   const pickDimensionCandidate = (exclude = new Set(), options = {}) => {
     const preferCurrency = Boolean(options.preferCurrency);
+    const rowCount = Number(profile?.rowCount ?? rows.length ?? 0) || 0;
     const candidates = profileCols.filter(col => {
       if (!col) return false;
-      const name = String(col.name || '');
+      const name = String(col.name || '').trim();
       if (!name || exclude.has(name)) return false;
       if (col.type !== 'string') return false;
       const unique = Number(col.unique ?? 0);
-      if (!Number.isFinite(unique) || unique <= 1 || unique > 600) return false;
+      if (!Number.isFinite(unique) || unique <= 1 || unique > 140) return false;
       const completenessVal = Number(col.completeness ?? 0);
-      if (completenessVal < 0.25) return false;
+      if (completenessVal < 0.75) return false;
+      const missingRatio = 1 - completenessVal;
+      if (missingRatio > 0.25) return false;
+      if (rowCount && unique / Math.max(1, rowCount) > 0.45) return false;
       if (col.placeholderName && col.hint !== 'currencyToken' && col.hint !== 'shortCode') return false;
-      if (col.hint === 'unitToken' && completenessVal < 0.9) return false;
+      if (col.hint === 'unitToken') return false;
       return true;
     });
     if (!candidates.length) return null;
@@ -180,9 +184,12 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
     const dimensionScore = (col) => {
       const completenessVal = Number(col.completeness ?? 0);
       const unique = Number(col.unique ?? 0);
-      let score = (completenessVal * 1.5) + Math.min(unique, 80) / 80;
-      if (col.hint === 'currencyToken') score += preferCurrency ? 0.7 : 0.2;
-      if (col.hint === 'unitToken') score -= 0.8;
+      let score = completenessVal * 2.2;
+      if (unique > 0) score += Math.min(unique, 100) / 220;
+      const trimmed = String(col.name || '').trim();
+      if (col.hint === 'currencyToken') score += preferCurrency ? 1.0 : 0.35;
+      if (/code$/i.test(trimmed) && unique > 70) score -= 0.9;
+      if (/\b(code|id|number)\b/i.test(trimmed) && unique > 90) score -= 0.9;
       if (col.placeholderName && col.hint !== 'currencyToken' && col.hint !== 'shortCode') score -= 0.6;
       return score;
     };
@@ -257,14 +264,30 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
     }));
   }
 
+  const altExclude = new Set([actualDesc, actualGroup].filter(Boolean).map(name => String(name || '').trim()));
+  const altCandidate = pickDimensionCandidate(altExclude);
+  if (altCandidate && altCandidate.name && altCandidate.name !== actualGroup) {
+    const altUnique = Number(altCandidate.unique ?? 0);
+    const altCompleteness = Number(altCandidate.completeness ?? 0);
+    if (altUnique && altUnique <= 80 && altCompleteness >= 0.8) {
+      extras.supplementalJobs.push({
+        groupBy: altCandidate.name,
+        metric: actualMetric,
+        agg: 'sum',
+        priority: 'supplemental'
+      });
+      extras.meta.altDimension = altCandidate.name;
+    }
+  }
+
   if (actualGroup) {
     const descMeta = actualDesc ? (columnMetaByLower.get(String(actualDesc).toLowerCase()) || columnMetaByName.get(actualDesc)) : null;
     const groupMeta = actualGroup ? (columnMetaByLower.get(String(actualGroup).toLowerCase()) || columnMetaByName.get(actualGroup)) : null;
     const descUnique = Number(descMeta?.unique ?? 0);
     const groupUnique = Number(groupMeta?.unique ?? 0);
     const rowEstimate = explicitRowEstimate ?? profile?.rowCount ?? rows.length;
-    const withinDescLimit = !descUnique || descUnique <= pivotDescLimit;
-    const withinGroupLimit = !groupUnique || groupUnique <= pivotGroupLimit;
+    const withinDescLimit = !descUnique || descUnique <= Math.min(pivotDescLimit, 120);
+    const withinGroupLimit = !groupUnique || groupUnique <= Math.min(pivotGroupLimit, 140);
     const withinRowLimit = !rowEstimate || rowEstimate <= pivotRowLimit;
 
     if (withinDescLimit && withinGroupLimit && withinRowLimit) {
@@ -282,6 +305,15 @@ export function buildLongFormatEnhancements(profile, rowsSource, options = {}) {
         groupUnique,
         rowEstimate
       });
+    }
+  }
+
+  if (Array.isArray(extras.topKJobs) && extras.topKJobs.length > 0) {
+    const descMeta = actualDesc ? (columnMetaByLower.get(String(actualDesc).toLowerCase()) || columnMetaByName.get(actualDesc)) : null;
+    const groupMeta = actualGroup ? (columnMetaByLower.get(String(actualGroup).toLowerCase()) || columnMetaByName.get(actualGroup)) : null;
+    const groupUnique = Number(groupMeta?.unique ?? 0);
+    if (!actualGroup || groupUnique > 140) {
+      extras.topKJobs = [];
     }
   }
 
@@ -310,6 +342,7 @@ export function buildLocalAgentPlan(context) {
   let jobs = deduplicateJobs([
     ...baseJobs,
     ...(enhancements.topKJobs || []),
+    ...(enhancements.supplementalJobs || []),
     ...(enhancements.pivotJob ? [enhancements.pivotJob] : [])
   ]).slice(0, maxCharts);
 
