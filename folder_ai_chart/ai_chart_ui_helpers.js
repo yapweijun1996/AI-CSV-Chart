@@ -502,15 +502,30 @@ function setGenerateButtonState(isRunning) {
 }
 
 async function buildAggCard(job, cardState = {}, sessionId = null, options = {}) {
-    const {
-        showMissing = false,
-        filterValue = 0,
-        filterMode = 'share',
-        charts = [{ type: 'auto', topN: 20 }],
-        explanation = null,
-        noAnimation = false // Pass noAnimation through cardState
-    } = cardState;
+    const state = cardState || {};
+    const hasShowMissingState = Object.prototype.hasOwnProperty.call(state, 'showMissing');
+    const hasFilterModeState = Object.prototype.hasOwnProperty.call(state, 'filterMode');
+    const hasFilterValueState = Object.prototype.hasOwnProperty.call(state, 'filterValue');
+
+    const jobFilterMode = (typeof job?.filterMode === 'string' && job.filterMode) ? job.filterMode : 'share';
+    const jobFilterValue = job?.filterValue ?? 0;
+    const jobShowMissing = typeof job?.showMissing === 'boolean' ? job.showMissing : false;
+
+    const filterMode = hasFilterModeState ? (state.filterMode || jobFilterMode) : jobFilterMode;
+    const filterValue = hasFilterValueState ? (state.filterValue ?? jobFilterValue) : jobFilterValue;
+    const showMissing = hasShowMissingState ? !!state.showMissing : jobShowMissing;
+
+    const charts = (Array.isArray(state.charts) && state.charts.length) ? state.charts : [{ type: 'auto', topN: 20 }];
+    const explanation = state.explanation ?? null;
+    const noAnimation = state.noAnimation ?? false; // Pass noAnimation through cardState
     const { skipExplanation = false } = options;
+
+    // Persist latest defaults so future auto jobs inherit user preferences
+    try {
+        window.DEFAULT_CARD_FILTER_MODE = filterMode || 'share';
+        window.DEFAULT_CARD_FILTER_VALUE = (filterValue === undefined || filterValue === null) ? 0 : filterValue;
+        window.DEFAULT_CARD_SHOW_MISSING = !!showMissing;
+    } catch {}
 
     // Generate canonical key for deduplication and state management
     const canonicalKey = canonicalJobKey(job);
@@ -618,7 +633,9 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     missingToggle.checked = !!showMissing;
     missingToggle.style.marginRight = '6px';
     missingToggle.addEventListener('change', () => {
-        reRenderCard(!!missingToggle.checked);
+        const nextValue = !!missingToggle.checked;
+        try { window.DEFAULT_CARD_SHOW_MISSING = nextValue; } catch {}
+        reRenderCard(nextValue);
         debouncedAutoSave();
     });
     missingToggleWrap.appendChild(missingToggle);
@@ -627,6 +644,12 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
     controls.prepend(missingToggleWrap);
 
     const applyFilterOnChange = () => {
+        const modeVal = filterModeSelect.value || 'share';
+        const inputVal = filterInput.value;
+        try {
+            window.DEFAULT_CARD_FILTER_MODE = modeVal;
+            window.DEFAULT_CARD_FILTER_VALUE = inputVal;
+        } catch {}
         reRenderCard(card.dataset.showMissing === 'true');
         debouncedAutoSave();
     };

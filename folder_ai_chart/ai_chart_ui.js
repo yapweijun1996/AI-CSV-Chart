@@ -592,6 +592,51 @@ const onSearch = createOnSearchHandler(applyFilter, renderRawBody);
 
 function autoPlan(profile, rows, excludedDimensions = []) {
     const columns = profile.columns.map(c => c.name);
+    const readNumberInput = (selector, fallback) => {
+        const el = document.querySelector(selector);
+        if (!el) return fallback;
+        const parsed = Number(el.value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const dimensionCompletenessMin = readNumberInput('#completenessThreshold', 0.6);
+    const cardinalityLimitRatio = readNumberInput('#cardinalityLimitRatio', 0.5);
+    const cardinalityAbsoluteLimit = Math.max(1, readNumberInput('#cardinalityAbsoluteLimit', 100));
+    const totalRowCount = Number(profile?.rowCount ?? rows.length ?? 0) || rows.length || 0;
+
+    const getDefaultFilterMode = () => {
+        const mode = window?.DEFAULT_CARD_FILTER_MODE;
+        return (typeof mode === 'string' && mode.trim()) ? mode : 'share';
+    };
+    const getDefaultFilterValue = () => {
+        const raw = window?.DEFAULT_CARD_FILTER_VALUE;
+        if (raw === '' || raw === null || raw === undefined) return 0;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const getDefaultShowMissing = () => {
+        const raw = window?.DEFAULT_CARD_SHOW_MISSING;
+        return typeof raw === 'boolean' ? raw : false;
+    };
+
+    const sharedJobDefaults = {
+        filterMode: getDefaultFilterMode(),
+        filterValue: getDefaultFilterValue(),
+        showMissing: getDefaultShowMissing()
+    };
+
+    const applyJobDefaults = (job = {}) => {
+        const withDefaults = { ...job };
+        if (!('filterMode' in withDefaults)) {
+            withDefaults.filterMode = sharedJobDefaults.filterMode;
+        }
+        if (!('filterValue' in withDefaults)) {
+            withDefaults.filterValue = sharedJobDefaults.filterValue;
+        }
+        if (!('showMissing' in withDefaults)) {
+            withDefaults.showMissing = sharedJobDefaults.showMissing;
+        }
+        return withDefaults;
+    };
     const erpPriority = getErpAnalysisPriority(columns);
 
     if (erpPriority && erpPriority.metrics.length > 0 && erpPriority.dimensions.length > 0) {
@@ -602,11 +647,11 @@ function autoPlan(profile, rows, excludedDimensions = []) {
         
         erpPriority.dimensions.forEach(dim => {
             if (dim && columns.includes(dim)) {
-                jobs.push({
+                jobs.push(applyJobDefaults({
                     groupBy: dim,
                     metric: primaryMetric.type === 'derived' ? primaryMetric.baseMetric : primaryMetric.name,
                     agg: 'sum'
-                });
+                }));
             }
         });
         return { jobs: deduplicateJobs(jobs).slice(0, 10), charts: [] };
@@ -621,8 +666,6 @@ function autoPlan(profile, rows, excludedDimensions = []) {
   }
   
   // Enhanced role categorization with business intelligence
-  const dimensionCompletenessMin = 0.75;
-  const dimensionUniqueMax = 120;
   const dims = roles
     .filter(x => x.role==='dimension' && !x.unsuitable)
     .map(x => ({ ...x, col: x.col }))
@@ -630,8 +673,14 @@ function autoPlan(profile, rows, excludedDimensions = []) {
       const name = String((d.col && d.col.name) || '').trim();
       const completeness = Number(d.col.completeness ?? d.completeness ?? 0);
       const unique = Number(d.col.unique ?? d.cardinality ?? 0);
-      if (completeness && completeness < dimensionCompletenessMin) return false;
-      if (unique && unique > dimensionUniqueMax) return false;
+      if (dimensionCompletenessMin > 0 && completeness < dimensionCompletenessMin) return false;
+      if (unique) {
+        const uniqueRatio = totalRowCount > 0 ? unique / totalRowCount : 0;
+        const exceedsAbsolute = unique > cardinalityAbsoluteLimit;
+        const ratioLimitActive = cardinalityLimitRatio > 0;
+        const exceedsRatio = ratioLimitActive ? uniqueRatio > cardinalityLimitRatio : true;
+        if (exceedsAbsolute && exceedsRatio) return false;
+      }
       if (/^_+\d*/.test(name) && d.col.hint !== 'currencyToken') return false;
       if (d.col.hint === 'unitToken') return false;
       return true;
@@ -685,13 +734,14 @@ function autoPlan(profile, rows, excludedDimensions = []) {
   if (dates.length && primary && dates[0].completeness >= 0.5) {
     const dateCol = dates[0];
     const bucket = autoBucket(rows, dateCol.col.name);
-    jobs.push({
+    const dateJob = applyJobDefaults({
       groupBy: dateCol.col.name,
       metric: primary.name,
       agg: dateCol.category === 'financial' ? 'sum' : 'sum',
       dateBucket: bucket,
       temporal: dateCol.temporal
     });
+    jobs.push(dateJob);
     charts.push({
       useJob: jobs.length-1,
       preferredType: 'line',
@@ -725,8 +775,14 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     if (!name || seenDimNames.has(name)) continue;
     const completeness = Number(dim?.col?.completeness ?? dim.completeness ?? 0);
     const unique = Number(dim?.col?.unique ?? dim.cardinality ?? 0);
-    if (completeness && completeness < dimensionCompletenessMin) continue;
-    if (unique && unique > dimensionUniqueMax) continue;
+    if (dimensionCompletenessMin > 0 && completeness < dimensionCompletenessMin) continue;
+    if (unique) {
+      const uniqueRatio = totalRowCount > 0 ? unique / totalRowCount : 0;
+      const exceedsAbsolute = unique > cardinalityAbsoluteLimit;
+      const ratioLimitActive = cardinalityLimitRatio > 0;
+      const exceedsRatio = ratioLimitActive ? uniqueRatio > cardinalityLimitRatio : true;
+      if (exceedsAbsolute && exceedsRatio) continue;
+    }
     const cat = dim.category || 'general';
     const maxPerCat = categoryUseLimits.get(cat) ?? 2;
     const used = categoryCounts.get(cat) || 0;
@@ -748,13 +804,14 @@ function autoPlan(profile, rows, excludedDimensions = []) {
 
     if (primary) {
       const aggType = 'sum';
-      jobs.push({
+      const job = applyJobDefaults({
         groupBy: d.col.name,
         metric: primary.name,
         agg: aggType,
         category: d.category,
         priority: d.priority
       });
+      jobs.push(job);
 
       let chartType = 'bar';
       if (d.category === 'status' && d.col.unique <= 8) chartType = 'pie';
@@ -770,12 +827,13 @@ function autoPlan(profile, rows, excludedDimensions = []) {
         priority: d.priority === 'high' ? 'high' : 'normal'
       });
     } else {
-      jobs.push({
+      const job = applyJobDefaults({
         groupBy: d.col.name,
         metric: null,
         agg: 'count',
         category: d.category
       });
+      jobs.push(job);
       charts.push({
         useJob: jobs.length - 1,
         preferredType: d.col.unique <= 8 ? 'pie' : 'bar',
@@ -794,21 +852,23 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     const extraTopJobs = (enhancements.topKJobs || []).slice(0, 5);
     for (const job of extraTopJobs) {
       if (jobs.length >= 10) break;
-      jobs.push(job);
+      const jobWithDefaults = applyJobDefaults(job);
+      jobs.push(jobWithDefaults);
       const jobIndex = jobs.length - 1;
       if (jobIndex < 10) {
-        const metricLabel = job.metric || primary?.name || 'Value';
-        const whereLabel = job.where ? Object.values(job.where)[0] : '';
+        const metricLabel = jobWithDefaults.metric || primary?.name || 'Value';
+        const whereLabel = jobWithDefaults.where ? Object.values(jobWithDefaults.where)[0] : '';
         charts.push({
           useJob: jobIndex,
           preferredType: 'bar',
-          title: `${metricLabel} by ${job.groupBy}${whereLabel ? ` — ${whereLabel}` : ''}`,
+          title: `${metricLabel} by ${jobWithDefaults.groupBy}${whereLabel ? ` — ${whereLabel}` : ''}`,
           priority: 'normal'
         });
       }
     }
     if (enhancements.pivotJob && jobs.length < 10) {
-      jobs.push(enhancements.pivotJob);
+      const pivotJob = applyJobDefaults({ ...enhancements.pivotJob });
+      jobs.push(pivotJob);
     }
   } catch (e) {
     console.warn('buildLongFormatEnhancements failed in autoPlan:', e);
@@ -824,12 +884,13 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     const secondMetric = secondaryMetrics[0];
     const topDim = limitedDims[0];
     if (secondMetric.col && topDim.col) {
-      jobs.push({
+      const job = applyJobDefaults({
         groupBy: topDim.col.name,
         metric: secondMetric.col.name,
         agg: secondMetric.category === 'financial' ? 'sum' : 'sum',
         category: secondMetric.category
       });
+      jobs.push(job);
       charts.push({
         useJob: jobs.length-1,
         preferredType: 'bar',
