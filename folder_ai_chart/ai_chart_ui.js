@@ -783,6 +783,23 @@ function autoPlan(profile, rows, excludedDimensions = []) {
   profile.columns.filter(col => col.type === "number").forEach(col => pushMetricCol(col));
   if (metricsOrdered.length === 0 && primary) pushMetricCol(primary);
 
+  const fallbackMetricName = metricsOrdered[0]?.name || primary?.name;
+  let enhancements = { topKJobs: [], supplementalJobs: [], pivotJob: null, meta: {} };
+  let generalJobCap = maxJobs;
+  try {
+    enhancements = buildLongFormatEnhancements(profile, rows, {
+      metricKey: fallbackMetricName || "Value",
+      rowEstimate: totalRowCount
+    });
+    if (enhancements?.pivotJob) {
+      generalJobCap = Math.max(0, maxJobs - 1);
+    }
+  } catch (error) {
+    console.warn("buildLongFormatEnhancements failed in autoPlan:", error);
+    enhancements = { topKJobs: [], supplementalJobs: [], pivotJob: null, meta: {} };
+    generalJobCap = maxJobs;
+  }
+
   const dimensionPool = (() => {
     const names = new Set();
     const list = [];
@@ -808,8 +825,11 @@ function autoPlan(profile, rows, excludedDimensions = []) {
   const maxDimsPerMetric = 3;
   const maxUsagePerDimension = 2;
 
-  const pushJob = (jobSpec, chartBuilder) => {
-    if (!jobSpec || jobs.length >= maxJobs) return null;
+  const pushJob = (jobSpec, chartBuilder, options = {}) => {
+    if (!jobSpec) return null;
+    const { respectReserved = false } = options;
+    const limit = respectReserved ? generalJobCap : maxJobs;
+    if (jobs.length >= limit) return null;
     const withDefaults = applyJobDefaults(jobSpec);
     const key = canonicalJobKey(withDefaults);
     if (jobKeySet.has(key)) return null;
@@ -852,7 +872,7 @@ function autoPlan(profile, rows, excludedDimensions = []) {
       title: `${metricCol.name} over ${dateEntry.col.name}`,
       category: dateEntry.category || "temporal",
       priority
-    }));
+    }), { respectReserved: true });
   };
 
   const addDimensionJob = (metricCol, dimEntry) => {
@@ -867,7 +887,7 @@ function autoPlan(profile, rows, excludedDimensions = []) {
       agg: "sum",
       category: dimEntry.category,
       priority: dimEntry.priority
-    }, (idx) => buildDimensionChart(idx, metricCol, dimEntry));
+    }, (idx) => buildDimensionChart(idx, metricCol, dimEntry), { respectReserved: true });
     if (added) {
       dimensionUsage.set(dimName, (dimensionUsage.get(dimName) || 0) + 1);
       metricUsage.set(metricCol.name, (metricUsage.get(metricCol.name) || 0) + 1);
@@ -877,57 +897,59 @@ function autoPlan(profile, rows, excludedDimensions = []) {
   if (metricsOrdered.length && erpPriority?.dimensions?.length) {
     const primaryMetric = metricsOrdered[0];
     erpPriority.dimensions.forEach(dimName => {
+      if (jobs.length >= generalJobCap) return;
       const dimEntry = dimensionPool.find(d => d.col.name === dimName);
       if (dimEntry) addDimensionJob(primaryMetric, dimEntry);
     });
   }
 
   metricsOrdered.forEach((metricCol, metricIdx) => {
-    if (!metricCol || jobs.length >= maxJobs) return;
+    if (!metricCol || jobs.length >= generalJobCap) return;
     if (dateCandidates[metricIdx]) {
       addTemporalJob(metricCol, dateCandidates[metricIdx], metricIdx === 0 ? "critical" : "high");
     } else if (metricIdx === 0 && dateCandidates.length) {
       addTemporalJob(metricCol, dateCandidates[0], "critical");
     }
     for (const dimEntry of dimensionPool) {
-      if (jobs.length >= maxJobs) break;
+      if (jobs.length >= generalJobCap) break;
       addDimensionJob(metricCol, dimEntry);
       if ((metricUsage.get(metricCol.name) || 0) >= maxDimsPerMetric) break;
     }
   });
 
-  const fallbackMetricName = metricsOrdered[0]?.name || primary?.name;
+  const extraTopJobs = (enhancements.topKJobs || []).slice(0, 5);
+  for (const job of extraTopJobs) {
+    if (jobs.length >= generalJobCap) break;
+    const metricName = job.metric || fallbackMetricName;
+    if (!metricName) continue;
+    const sanitizedJob = { ...job, metric: metricName, agg: "sum" };
+    pushJob(sanitizedJob, (idx) => {
+      const whereLabel = job.where ? Object.values(job.where)[0] : "";
+      return {
+        useJob: idx,
+        preferredType: "bar",
+        title: `${metricName} by ${job.groupBy}${whereLabel ? ` — ${whereLabel}` : ""}`,
+        priority: "normal"
+      };
+    }, { respectReserved: true });
+  }
 
-  try {
-    const enhancements = buildLongFormatEnhancements(profile, rows, {
-      metricKey: fallbackMetricName || "Value",
-      rowEstimate: totalRowCount
-    });
-    const extraTopJobs = (enhancements.topKJobs || []).slice(0, 5);
-    for (const job of extraTopJobs) {
-      if (jobs.length >= maxJobs) break;
+  if (enhancements.supplementalJobs?.length) {
+    for (const job of enhancements.supplementalJobs) {
+      if (jobs.length >= generalJobCap) break;
       const metricName = job.metric || fallbackMetricName;
       if (!metricName) continue;
-      const sanitizedJob = { ...job, metric: metricName, agg: "sum" };
-      pushJob(sanitizedJob, (idx) => {
-        const whereLabel = job.where ? Object.values(job.where)[0] : "";
-        return {
-          useJob: idx,
-          preferredType: "bar",
-          title: `${metricName} by ${job.groupBy}${whereLabel ? ` — ${whereLabel}` : ""}`,
-          priority: "normal"
-        };
-      });
+      const supplementalJob = { ...job, metric: metricName, agg: "sum" };
+      pushJob(supplementalJob, null, { respectReserved: true });
     }
-    if (enhancements.pivotJob && jobs.length < maxJobs) {
-      const pivotMetric = enhancements.pivotJob.metric || fallbackMetricName;
-      if (pivotMetric) {
-        const pivotJob = { ...enhancements.pivotJob, metric: pivotMetric, agg: "sum" };
-        pushJob(pivotJob, null);
-      }
+  }
+
+  if (enhancements.pivotJob) {
+    const pivotMetric = enhancements.pivotJob.metric || fallbackMetricName;
+    if (pivotMetric) {
+      const pivotJob = { ...enhancements.pivotJob, metric: pivotMetric, agg: "sum" };
+      pushJob(pivotJob, null);
     }
-  } catch (error) {
-    console.warn("buildLongFormatEnhancements failed in autoPlan:", error);
   }
 
   if (jobs.length === 0 && metricsOrdered.length && dimensionPool.length) {
