@@ -591,89 +591,128 @@ const onSearch = createOnSearchHandler(applyFilter, renderRawBody);
 // Enhanced Pattern Recognition for Business Data Types
 
 function autoPlan(profile, rows, excludedDimensions = []) {
-    const columns = profile.columns.map(c => c.name);
-    const readNumberInput = (selector, fallback) => {
-        const el = document.querySelector(selector);
-        if (!el) return fallback;
-        const parsed = Number(el.value);
-        return Number.isFinite(parsed) ? parsed : fallback;
-    };
-    const dimensionCompletenessMin = readNumberInput('#completenessThreshold', 0.6);
-    const cardinalityLimitRatio = readNumberInput('#cardinalityLimitRatio', 0.5);
-    const cardinalityAbsoluteLimit = Math.max(1, readNumberInput('#cardinalityAbsoluteLimit', 100));
-    const totalRowCount = Number(profile?.rowCount ?? rows.length ?? 0) || rows.length || 0;
+  const columns = profile.columns.map(c => c.name);
+  const readNumberInput = (selector, fallback) => {
+    const el = document.querySelector(selector);
+    if (!el) return fallback;
+    const parsed = Number(el.value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const dimensionCompletenessMin = readNumberInput("#completenessThreshold", 0.6);
+  const cardinalityLimitRatio = readNumberInput("#cardinalityLimitRatio", 0.5);
+  const cardinalityAbsoluteLimit = Math.max(1, readNumberInput("#cardinalityAbsoluteLimit", 100));
+  const totalRowCount = Number(profile?.rowCount ?? rows.length ?? 0) || rows.length || 0;
+  const maxJobs = 10;
 
-    const getDefaultFilterMode = () => {
-        const mode = window?.DEFAULT_CARD_FILTER_MODE;
-        return (typeof mode === 'string' && mode.trim()) ? mode : 'share';
-    };
-    const getDefaultFilterValue = () => {
-        const raw = window?.DEFAULT_CARD_FILTER_VALUE;
-        if (raw === '' || raw === null || raw === undefined) return 0;
-        const parsed = Number(raw);
-        return Number.isFinite(parsed) ? parsed : 0;
-    };
-    const getDefaultShowMissing = () => {
-        const raw = window?.DEFAULT_CARD_SHOW_MISSING;
-        return typeof raw === 'boolean' ? raw : false;
-    };
+  const getDefaultFilterMode = () => {
+    const mode = window?.DEFAULT_CARD_FILTER_MODE;
+    return (typeof mode === "string" && mode.trim()) ? mode : "share";
+  };
+  const getDefaultFilterValue = () => {
+    const raw = window?.DEFAULT_CARD_FILTER_VALUE;
+    if (raw === "" || raw === null || raw === undefined) return 0;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const getDefaultShowMissing = () => {
+    const raw = window?.DEFAULT_CARD_SHOW_MISSING;
+    return typeof raw === "boolean" ? raw : false;
+  };
 
-    const sharedJobDefaults = {
-        filterMode: getDefaultFilterMode(),
-        filterValue: getDefaultFilterValue(),
-        showMissing: getDefaultShowMissing()
-    };
+  const sharedJobDefaults = {
+    filterMode: getDefaultFilterMode(),
+    filterValue: getDefaultFilterValue(),
+    showMissing: getDefaultShowMissing()
+  };
 
-    const applyJobDefaults = (job = {}) => {
-        const withDefaults = { ...job };
-        if (!('filterMode' in withDefaults)) {
-            withDefaults.filterMode = sharedJobDefaults.filterMode;
-        }
-        if (!('filterValue' in withDefaults)) {
-            withDefaults.filterValue = sharedJobDefaults.filterValue;
-        }
-        if (!('showMissing' in withDefaults)) {
-            withDefaults.showMissing = sharedJobDefaults.showMissing;
-        }
-        return withDefaults;
-    };
-    const erpPriority = getErpAnalysisPriority(columns);
-
-    if (erpPriority && erpPriority.metrics.length > 0 && erpPriority.dimensions.length > 0) {
-        console.log('[Debug] autoPlan: Using ERP priority plan:', JSON.stringify(erpPriority, null, 2));
-        const jobs = [];
-        const primaryMetric = erpPriority.metrics[0];
-        console.log('[Debug] autoPlan: Primary metric selected:', JSON.stringify(primaryMetric, null, 2));
-        
-        erpPriority.dimensions.forEach(dim => {
-            if (dim && columns.includes(dim)) {
-                jobs.push(applyJobDefaults({
-                    groupBy: dim,
-                    metric: primaryMetric.type === 'derived' ? primaryMetric.baseMetric : primaryMetric.name,
-                    agg: 'sum'
-                }));
-            }
-        });
-        return { jobs: deduplicateJobs(jobs).slice(0, 10), charts: [] };
+  const applyJobDefaults = (job = {}) => {
+    const withDefaults = { ...job };
+    if (!("filterMode" in withDefaults)) {
+      withDefaults.filterMode = sharedJobDefaults.filterMode;
     }
+    if (!("filterValue" in withDefaults)) {
+      withDefaults.filterValue = sharedJobDefaults.filterValue;
+    }
+    if (!("showMissing" in withDefaults)) {
+      withDefaults.showMissing = sharedJobDefaults.showMissing;
+    }
+    return withDefaults;
+  };
 
-    console.log('[autoPlan] Starting plan, excluding:', excludedDimensions);
+  const erpPriority = getErpAnalysisPriority(columns);
+  const metricColumnsMap = new Map(profile.columns.map(c => [c.name, c]));
+
+  const deriveProductMetrics = () => {
+    const priceCandidate = profile.columns.find(col => col.type === "number" && /price|rate|unit/i.test(col.name));
+    const qtyCandidate = profile.columns.find(col => col.type === "number" && /qty|quantity|count/i.test(col.name));
+    if (!priceCandidate || !qtyCandidate) return;
+    const derivedName = `${priceCandidate.name} * ${qtyCandidate.name}`;
+    let derivedColumn = metricColumnsMap.get(derivedName);
+    if (!derivedColumn) {
+      derivedColumn = {
+        name: derivedName,
+        type: "number",
+        unique: 0,
+        completeness: 0,
+        samples: [],
+        category: "financial",
+        priority: "normal",
+        derived: true
+      };
+      profile.columns.push(derivedColumn);
+      metricColumnsMap.set(derivedName, derivedColumn);
+    }
+    const sampleValues = [];
+    let nonEmpty = 0;
+    const valueSet = new Set();
+    for (const row of rows) {
+      const price = toNum(row[priceCandidate.name]);
+      const qty = toNum(row[qtyCandidate.name]);
+      if (Number.isFinite(price) && Number.isFinite(qty)) {
+        const product = price * qty;
+        row[derivedName] = product;
+        nonEmpty++;
+        valueSet.add(String(product));
+        if (sampleValues.length < 3) sampleValues.push(String(product));
+      } else {
+        row[derivedName] = "";
+      }
+    }
+    if (nonEmpty === 0) {
+      rows.forEach(row => { delete row[derivedName]; });
+      profile.columns = profile.columns.filter(col => col.name !== derivedName);
+      metricColumnsMap.delete(derivedName);
+      return;
+    }
+    derivedColumn.unique = valueSet.size;
+    derivedColumn.completeness = nonEmpty / rows.length;
+    derivedColumn.samples = sampleValues;
+    derivedColumn.type = "number";
+    derivedColumn.category = derivedColumn.category || "financial";
+  };
+
+  deriveProductMetrics();
+
+  console.log('[autoPlan] Starting plan, excluding:', excludedDimensions);
   console.log('[Debug] autoPlan: Available columns for metric selection:', profile.columns.map(c => c.name));
-  let roles = profile.columns.map(c => ({ col:c, ...inferRole(c, profile, rows) }));
+
+  let roles = profile.columns.map(c => ({ col: c, ...inferRole(c, profile, rows) }));
   console.log('[Debug] autoPlan: All inferred roles:', roles.map(r => ({ name: r.col.name, role: r.role, category: r.category, priority: r.priority, erp: r.erp })));
   if (excludedDimensions.length > 0) {
     roles = roles.filter(r => !excludedDimensions.includes(r.col.name));
   }
-  
-  // Enhanced role categorization with business intelligence
+
   const dims = roles
-    .filter(x => x.role==='dimension' && !x.unsuitable)
+    .filter(x => x.role === "dimension" && !x.unsuitable)
     .map(x => ({ ...x, col: x.col }))
     .filter(d => {
-      const name = String((d.col && d.col.name) || '').trim();
+      const name = String(d.col?.name || "").trim();
+      if (!name) return false;
+      if (/^_+\d*$/.test(name) && d.col.hint !== "currencyToken") return false;
+      if (d.col?.hint === "unitToken") return false;
       const completeness = Number(d.col.completeness ?? d.completeness ?? 0);
-      const unique = Number(d.col.unique ?? d.cardinality ?? 0);
       if (dimensionCompletenessMin > 0 && completeness < dimensionCompletenessMin) return false;
+      const unique = Number(d.col.unique ?? d.cardinality ?? 0);
       if (unique) {
         const uniqueRatio = totalRowCount > 0 ? unique / totalRowCount : 0;
         const exceedsAbsolute = unique > cardinalityAbsoluteLimit;
@@ -681,8 +720,6 @@ function autoPlan(profile, rows, excludedDimensions = []) {
         const exceedsRatio = ratioLimitActive ? uniqueRatio > cardinalityLimitRatio : true;
         if (exceedsAbsolute && exceedsRatio) return false;
       }
-      if (/^_+\d*/.test(name) && d.col.hint !== 'currencyToken') return false;
-      if (d.col.hint === 'unitToken') return false;
       return true;
     })
     .sort((a, b) => {
@@ -690,12 +727,15 @@ function autoPlan(profile, rows, excludedDimensions = []) {
       if (Math.abs(compDiff) > 0.05) return compDiff;
       return (a.cardinality ?? Number(a.col.unique ?? 0)) - (b.cardinality ?? Number(b.col.unique ?? 0));
     });
-  const dates = roles.filter(x => x.role==='date' && !x.unsuitable && x.completeness > 0.2).map(x => ({ ...x, col: x.col }))
+
+  const dates = roles
+    .filter(x => x.role === "date" && !x.unsuitable && x.completeness > 0.2)
+    .map(x => ({ ...x, col: x.col }))
     .sort((a, b) => b.completeness - a.completeness);
-  const metricsStrong = roles.filter(x => x.role==='metric:strong').map(x => ({ ...x, col: x.col }));
-  const metrics = roles.filter(x => x.role==='metric' || x.role==='metric:strong').map(x => ({ ...x, col: x.col }));
-  
-  // Sort strong metrics by the priority assigned in inferRole
+
+  const metricsStrong = roles.filter(x => x.role === "metric:strong").map(x => ({ ...x, col: x.col }));
+  const metrics = roles.filter(x => x.role === "metric" || x.role === "metric:strong").map(x => ({ ...x, col: x.col }));
+
   metricsStrong.sort((a, b) => {
     const priorities = { critical: 3, high: 2, normal: 1, low: 0 };
     const priorityA = priorities[a.priority] || 0;
@@ -703,208 +743,199 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     return priorityB - priorityA;
   });
   console.log('[Debug] autoPlan: Sorted strong metrics:', metricsStrong.map(m => `${m.col.name} (priority: ${m.priority})`));
-  
-  // Detect hierarchical relationships
+
   const hierarchicalRels = detectHierarchicalRelationships(profile);
-  
-  // Categorize dimensions by business context
   const businessDims = {
-    financial: dims.filter(d => d.category === 'financial'),
-    location: dims.filter(d => d.category === 'location'),
-    contact: dims.filter(d => d.category === 'contact'),
-    status: dims.filter(d => d.category === 'status'),
-    hierarchy: dims.filter(d => d.category === 'hierarchy'),
-    code: dims.filter(d => d.category === 'code' || d.identifier),
-    temporal: dims.filter(d => d.category === 'temporal'),
-    general: dims.filter(d => d.category === 'general' || !d.category)
+    financial: dims.filter(d => d.category === "financial"),
+    location: dims.filter(d => d.category === "location"),
+    contact: dims.filter(d => d.category === "contact"),
+    status: dims.filter(d => d.category === "status"),
+    hierarchy: dims.filter(d => d.category === "hierarchy"),
+    code: dims.filter(d => d.category === "code" || d.identifier),
+    temporal: dims.filter(d => d.category === "temporal"),
+    general: dims.filter(d => d.category === "general" || !d.category)
   };
-  
-  // Prioritize metrics by business importance
-  const financialMetrics = metricsStrong.filter(m => m.category === 'financial');
-  const quantityMetrics = metricsStrong.filter(m => m.category === 'quantity');
-  const generalMetrics = metricsStrong.filter(m => m.category === 'general' || !m.category);
-  
-  // Select primary metric with enhanced business logic
-  const primary = financialMetrics[0]?.col || quantityMetrics[0]?.col ||
-                  metricsStrong[0]?.col || pickPrimaryMetric(profile, rows);
-  console.log('[autoPlan] Final primary metric selected:', primary?.name);
-  const jobs = []; const charts = [];
-  
-  // Enhanced temporal analysis with business patterns - only if date has good data
-  if (dates.length && primary && dates[0].completeness >= 0.5) {
-    const dateCol = dates[0];
-    const bucket = autoBucket(rows, dateCol.col.name);
-    const dateJob = applyJobDefaults({
-      groupBy: dateCol.col.name,
-      metric: primary.name,
-      agg: dateCol.category === 'financial' ? 'sum' : 'sum',
-      dateBucket: bucket,
-      temporal: dateCol.temporal
-    });
-    jobs.push(dateJob);
-    charts.push({
-      useJob: jobs.length-1,
-      preferredType: 'line',
-      title: `${primary.name} over ${dateCol.col.name}`,
-      priority: 'critical'
+
+  const primary = metricsStrong[0]?.col || pickPrimaryMetric(profile, rows);
+  console.log('[autoPlan] Primary metric selected:', primary?.name);
+
+  const metricsOrdered = [];
+  const metricsAdded = new Set();
+  const maxMetricCount = 3;
+  const pushMetricCol = (col) => {
+    if (!col || !col.name) return col;
+    if (metricsAdded.has(col.name)) return col;
+    if (metricsOrdered.length >= maxMetricCount) return col;
+    metricsOrdered.push(col);
+    metricsAdded.add(col.name);
+    return col;
+  };
+
+  if (primary) pushMetricCol(primary);
+  if (erpPriority?.metrics?.length) {
+    erpPriority.metrics.forEach(m => {
+      const col = metricColumnsMap.get(m.name);
+      if (col) pushMetricCol(col);
     });
   }
-  
-  // Prioritized dimension analysis based on business context
-  const prioritizedDims = [
-    ...businessDims.status.slice(0,1),      // Status/Category (highest business value)
-    ...businessDims.location.slice(0,1),    // Geographic analysis
-    ...businessDims.hierarchy.slice(0,1),   // Organizational structure
-    ...businessDims.code.slice(0,2),        // Identifier/code columns that still behave dimensionally
-    ...businessDims.temporal.slice(0,1),    // Temporal categories
-    ...businessDims.general.slice(0,2)      // General dimensions
-  ].filter(Boolean);
+  metricsStrong.forEach(m => pushMetricCol(m.col));
+  metrics.forEach(m => pushMetricCol(m.col));
+  profile.columns.filter(col => col.type === "number").forEach(col => pushMetricCol(col));
+  if (metricsOrdered.length === 0 && primary) pushMetricCol(primary);
 
-  const limitedDims = [];
-  const seenDimNames = new Set();
-  const categoryUseLimits = new Map([
-    ['code', 1],
-    ['hierarchy', 1],
-    ['status', 2],
-    ['general', 2],
-    ['location', 1]
-  ]);
-  const categoryCounts = new Map();
-  for (const dim of prioritizedDims) {
-    const name = String(dim?.col?.name || '').trim();
-    if (!name || seenDimNames.has(name)) continue;
-    const completeness = Number(dim?.col?.completeness ?? dim.completeness ?? 0);
-    const unique = Number(dim?.col?.unique ?? dim.cardinality ?? 0);
-    if (dimensionCompletenessMin > 0 && completeness < dimensionCompletenessMin) continue;
-    if (unique) {
-      const uniqueRatio = totalRowCount > 0 ? unique / totalRowCount : 0;
-      const exceedsAbsolute = unique > cardinalityAbsoluteLimit;
-      const ratioLimitActive = cardinalityLimitRatio > 0;
-      const exceedsRatio = ratioLimitActive ? uniqueRatio > cardinalityLimitRatio : true;
-      if (exceedsAbsolute && exceedsRatio) continue;
+  const dimensionPool = (() => {
+    const names = new Set();
+    const list = [];
+    const pushDim = (entry) => {
+      if (!entry || !entry.col || !entry.col.name) return;
+      if (names.has(entry.col.name)) return;
+      list.push(entry);
+      names.add(entry.col.name);
+    };
+    const erpDims = (erpPriority?.dimensions || []).map(dimName => dims.find(d => d.col.name === dimName)).filter(Boolean);
+    erpDims.forEach(pushDim);
+    dims.forEach(pushDim);
+    return list.slice(0, 8);
+  })();
+
+  const dateCandidates = dates.filter(d => d.completeness >= 0.4).slice(0, 2);
+
+  const jobs = [];
+  const charts = [];
+  const jobKeySet = new Set();
+  const dimensionUsage = new Map();
+  const metricUsage = new Map();
+  const maxDimsPerMetric = 3;
+  const maxUsagePerDimension = 2;
+
+  const pushJob = (jobSpec, chartBuilder) => {
+    if (!jobSpec || jobs.length >= maxJobs) return null;
+    const withDefaults = applyJobDefaults(jobSpec);
+    const key = canonicalJobKey(withDefaults);
+    if (jobKeySet.has(key)) return null;
+    jobKeySet.add(key);
+    jobs.push(withDefaults);
+    const jobIndex = jobs.length - 1;
+    if (typeof chartBuilder === "function") {
+      const chart = chartBuilder(jobIndex, withDefaults);
+      if (chart) charts.push(chart);
     }
-    const cat = dim.category || 'general';
-    const maxPerCat = categoryUseLimits.get(cat) ?? 2;
-    const used = categoryCounts.get(cat) || 0;
-    if (used >= maxPerCat) continue;
-    limitedDims.push(dim);
-    seenDimNames.add(name);
-    categoryCounts.set(cat, used + 1);
-    if (limitedDims.length >= 4) break; // keep auto mode tidy but allow more coverage for long tables
+    return withDefaults;
+  };
+
+  const buildDimensionChart = (jobIndex, metricCol, dimEntry) => {
+    const uniqueCount = Number(dimEntry?.col?.unique ?? 0);
+    let preferredType = "bar";
+    if (dimEntry?.category === "hierarchy") preferredType = "hbar";
+    else if (uniqueCount > 0 && uniqueCount <= 8) preferredType = "pie";
+    return {
+      useJob: jobIndex,
+      preferredType,
+      title: `${metricCol.name} by ${dimEntry.col.name}`,
+      category: dimEntry.category || "general",
+      priority: dimEntry.priority === "high" ? "high" : "normal"
+    };
+  };
+
+  const addTemporalJob = (metricCol, dateEntry, priority = "critical") => {
+    if (!metricCol || !dateEntry || !dateEntry.col?.name) return;
+    const bucket = autoBucket(rows, dateEntry.col.name);
+    pushJob({
+      groupBy: dateEntry.col.name,
+      metric: metricCol.name,
+      agg: "sum",
+      dateBucket: bucket,
+      category: dateEntry.category
+    }, (idx) => ({
+      useJob: idx,
+      preferredType: "line",
+      title: `${metricCol.name} over ${dateEntry.col.name}`,
+      category: dateEntry.category || "temporal",
+      priority
+    }));
+  };
+
+  const addDimensionJob = (metricCol, dimEntry) => {
+    if (!metricCol || !dimEntry || !dimEntry.col?.name) return;
+    if (metricCol.name === dimEntry.col.name) return;
+    const dimName = dimEntry.col.name;
+    if ((dimensionUsage.get(dimName) || 0) >= maxUsagePerDimension) return;
+    if ((metricUsage.get(metricCol.name) || 0) >= maxDimsPerMetric) return;
+    const added = pushJob({
+      groupBy: dimName,
+      metric: metricCol.name,
+      agg: "sum",
+      category: dimEntry.category,
+      priority: dimEntry.priority
+    }, (idx) => buildDimensionChart(idx, metricCol, dimEntry));
+    if (added) {
+      dimensionUsage.set(dimName, (dimensionUsage.get(dimName) || 0) + 1);
+      metricUsage.set(metricCol.name, (metricUsage.get(metricCol.name) || 0) + 1);
+    }
+  };
+
+  if (metricsOrdered.length && erpPriority?.dimensions?.length) {
+    const primaryMetric = metricsOrdered[0];
+    erpPriority.dimensions.forEach(dimName => {
+      const dimEntry = dimensionPool.find(d => d.col.name === dimName);
+      if (dimEntry) addDimensionJob(primaryMetric, dimEntry);
+    });
   }
 
-  if (limitedDims.length === 0 && dims.length) {
-    limitedDims.push(dims[0]);
-  }
-
-  limitedDims.forEach(d => {
-    if (!d || !d.col) return;
-    const uniqueCount = Number(d.col.unique ?? 0);
-    if (Number.isFinite(uniqueCount) && uniqueCount <= 1) return;
-
-    if (primary) {
-      const aggType = 'sum';
-      const job = applyJobDefaults({
-        groupBy: d.col.name,
-        metric: primary.name,
-        agg: aggType,
-        category: d.category,
-        priority: d.priority
-      });
-      jobs.push(job);
-
-      let chartType = 'bar';
-      if (d.category === 'status' && d.col.unique <= 8) chartType = 'pie';
-      else if (d.category === 'location') chartType = 'bar';
-      else if (d.category === 'hierarchy') chartType = 'hbar';
-      else if (d.col.unique <= 8) chartType = 'pie';
-
-      charts.push({
-        useJob: jobs.length - 1,
-        preferredType: chartType,
-        title: `${primary.name} by ${d.col.name}`,
-        category: d.category,
-        priority: d.priority === 'high' ? 'high' : 'normal'
-      });
-    } else {
-      const job = applyJobDefaults({
-        groupBy: d.col.name,
-        metric: null,
-        agg: 'count',
-        category: d.category
-      });
-      jobs.push(job);
-      charts.push({
-        useJob: jobs.length - 1,
-        preferredType: d.col.unique <= 8 ? 'pie' : 'bar',
-        title: `count(*) by ${d.col.name}`,
-        category: d.category,
-        priority: 'low'
-      });
+  metricsOrdered.forEach((metricCol, metricIdx) => {
+    if (!metricCol || jobs.length >= maxJobs) return;
+    if (dateCandidates[metricIdx]) {
+      addTemporalJob(metricCol, dateCandidates[metricIdx], metricIdx === 0 ? "critical" : "high");
+    } else if (metricIdx === 0 && dateCandidates.length) {
+      addTemporalJob(metricCol, dateCandidates[0], "critical");
+    }
+    for (const dimEntry of dimensionPool) {
+      if (jobs.length >= maxJobs) break;
+      addDimensionJob(metricCol, dimEntry);
+      if ((metricUsage.get(metricCol.name) || 0) >= maxDimsPerMetric) break;
     }
   });
 
+  const fallbackMetricName = metricsOrdered[0]?.name || primary?.name;
+
   try {
     const enhancements = buildLongFormatEnhancements(profile, rows, {
-      metricKey: primary?.name || 'Value',
-      rowEstimate: profile?.rowCount || rows.length
+      metricKey: fallbackMetricName || "Value",
+      rowEstimate: totalRowCount
     });
     const extraTopJobs = (enhancements.topKJobs || []).slice(0, 5);
     for (const job of extraTopJobs) {
-      if (jobs.length >= 10) break;
-      const jobWithDefaults = applyJobDefaults(job);
-      jobs.push(jobWithDefaults);
-      const jobIndex = jobs.length - 1;
-      if (jobIndex < 10) {
-        const metricLabel = jobWithDefaults.metric || primary?.name || 'Value';
-        const whereLabel = jobWithDefaults.where ? Object.values(jobWithDefaults.where)[0] : '';
-        charts.push({
-          useJob: jobIndex,
-          preferredType: 'bar',
-          title: `${metricLabel} by ${jobWithDefaults.groupBy}${whereLabel ? ` — ${whereLabel}` : ''}`,
-          priority: 'normal'
-        });
+      if (jobs.length >= maxJobs) break;
+      const metricName = job.metric || fallbackMetricName;
+      if (!metricName) continue;
+      const sanitizedJob = { ...job, metric: metricName, agg: "sum" };
+      pushJob(sanitizedJob, (idx) => {
+        const whereLabel = job.where ? Object.values(job.where)[0] : "";
+        return {
+          useJob: idx,
+          preferredType: "bar",
+          title: `${metricName} by ${job.groupBy}${whereLabel ? ` — ${whereLabel}` : ""}`,
+          priority: "normal"
+        };
+      });
+    }
+    if (enhancements.pivotJob && jobs.length < maxJobs) {
+      const pivotMetric = enhancements.pivotJob.metric || fallbackMetricName;
+      if (pivotMetric) {
+        const pivotJob = { ...enhancements.pivotJob, metric: pivotMetric, agg: "sum" };
+        pushJob(pivotJob, null);
       }
     }
-    if (enhancements.pivotJob && jobs.length < 10) {
-      const pivotJob = applyJobDefaults({ ...enhancements.pivotJob });
-      jobs.push(pivotJob);
-    }
-  } catch (e) {
-    console.warn('buildLongFormatEnhancements failed in autoPlan:', e);
+  } catch (error) {
+    console.warn("buildLongFormatEnhancements failed in autoPlan:", error);
   }
 
-  // Secondary metric analysis with business context
-  const secondaryMetrics = [
-    ...quantityMetrics.filter(m => m.col.name !== primary?.name).slice(0,1),
-    ...generalMetrics.filter(m => m.col.name !== primary?.name).slice(0,1)
-  ];
-  
-  if (secondaryMetrics.length && limitedDims.length) {
-    const secondMetric = secondaryMetrics[0];
-    const topDim = limitedDims[0];
-    if (secondMetric.col && topDim.col) {
-      const job = applyJobDefaults({
-        groupBy: topDim.col.name,
-        metric: secondMetric.col.name,
-        agg: secondMetric.category === 'financial' ? 'sum' : 'sum',
-        category: secondMetric.category
-      });
-      jobs.push(job);
-      charts.push({
-        useJob: jobs.length-1,
-        preferredType: 'bar',
-        title: `${secondMetric.col.name} by ${topDim.col.name}`,
-        category: secondMetric.category,
-        priority: 'normal'
-      });
-    }
+  if (jobs.length === 0 && metricsOrdered.length && dimensionPool.length) {
+    addDimensionJob(metricsOrdered[0], dimensionPool[0]);
   }
-  
-  // Apply canonical deduplication before returning
-  const deduplicatedJobs = deduplicateJobs(jobs);
-  console.log('[Debug] autoPlan: Final generated jobs:', JSON.stringify(deduplicatedJobs.slice(0,10), null, 2));
-  return { jobs: deduplicatedJobs.slice(0,10), charts, hierarchicalRels, businessContext: businessDims };
+
+  console.log('[Debug] autoPlan: Final generated jobs:', JSON.stringify(jobs.slice(0, 10), null, 2));
+  return { jobs, charts, hierarchicalRels, businessContext: businessDims };
 }
 
 // Make autoPlan function available globally
