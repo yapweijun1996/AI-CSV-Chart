@@ -702,6 +702,8 @@ function autoPlan(profile, rows, excludedDimensions = []) {
     roles = roles.filter(r => !excludedDimensions.includes(r.col.name));
   }
 
+  const highCardDims = [];
+
   const dims = roles
     .filter(x => x.role === "dimension" && !x.unsuitable)
     .map(x => ({ ...x, col: x.col }))
@@ -718,7 +720,10 @@ function autoPlan(profile, rows, excludedDimensions = []) {
         const exceedsAbsolute = unique > cardinalityAbsoluteLimit;
         const ratioLimitActive = cardinalityLimitRatio > 0;
         const exceedsRatio = ratioLimitActive ? uniqueRatio > cardinalityLimitRatio : true;
-        if (exceedsAbsolute && exceedsRatio) return false;
+        if (exceedsAbsolute && exceedsRatio) {
+          highCardDims.push({ ...d, unique, uniqueRatio });
+          return false;
+        }
       }
       return true;
     })
@@ -950,6 +955,25 @@ function autoPlan(profile, rows, excludedDimensions = []) {
       const pivotJob = { ...enhancements.pivotJob, metric: pivotMetric, agg: "sum" };
       pushJob(pivotJob, null);
     }
+  }
+
+  const minJobTarget = Math.min(6, generalJobCap || maxJobs);
+  if (jobs.length < minJobTarget && highCardDims.length && metricsOrdered.length) {
+    const fallbackMetricCol = metricsOrdered[0] || primary;
+    const shareFloor = Math.min(0.05, Math.max(0.01, 5 / Math.max(totalRowCount || 1, 1)));
+    highCardDims.slice(0, 3).forEach(dimEntry => {
+      if (!fallbackMetricCol || jobs.length >= generalJobCap) return;
+      const boostedJob = {
+        groupBy: dimEntry.col.name,
+        metric: fallbackMetricCol.name,
+        agg: "sum",
+        category: dimEntry.category,
+        priority: "normal",
+        filterMode: "share",
+        filterValue: Number.isFinite(shareFloor) ? Number(shareFloor.toFixed(3)) : 0.02
+      };
+      pushJob(boostedJob, (idx) => buildDimensionChart(idx, fallbackMetricCol, dimEntry), { respectReserved: true });
+    });
   }
 
   if (jobs.length === 0 && metricsOrdered.length && dimensionPool.length) {

@@ -339,16 +339,112 @@ export function buildLocalAgentPlan(context) {
     rowEstimate: profile?.rowCount || rowsSource.length || includedRows.length
   });
 
-  let jobs = deduplicateJobs([
-    ...baseJobs,
-    ...(enhancements.topKJobs || []),
-    ...(enhancements.supplementalJobs || []),
-    ...(enhancements.pivotJob ? [enhancements.pivotJob] : [])
-  ]).slice(0, maxCharts);
-
-  const metricNameForCurrency = enhancements.meta?.metricName
+  const basePivot = baseJobs.find(job => job && job.type === 'pivot');
+  const fallbackMetricCandidate = enhancements.meta?.metricName
+    || basePivot?.metric
     || baseJobs.find(job => job && job.metric)?.metric
-    || (profileCols.find(col => col.type === 'number')?.name);
+    || preferFinancialMetric(profileCols.map(col => col.name))
+    || (profileCols.find(col => col.type === 'number')?.name)
+    || 'Value';
+
+  const columnNameSet = new Set(profileCols.map(col => col.name));
+  const numericCandidates = profileCols.filter(col => col.type === 'number').map(col => col.name);
+  let effectiveFallbackMetric = fallbackMetricCandidate;
+  if (!columnNameSet.has(effectiveFallbackMetric) && numericCandidates.length) {
+    effectiveFallbackMetric = numericCandidates[0];
+  }
+  if (!columnNameSet.has(effectiveFallbackMetric) && columnNameSet.has('Value')) {
+    effectiveFallbackMetric = 'Value';
+  }
+  if (!columnNameSet.has(effectiveFallbackMetric)) {
+    const [firstAvailable] = columnNameSet;
+    effectiveFallbackMetric = firstAvailable || fallbackMetricCandidate;
+  }
+  if (!effectiveFallbackMetric) {
+    effectiveFallbackMetric = 'Value';
+  }
+
+  let pivotCandidate = basePivot ? { ...basePivot } : null;
+  if (!pivotCandidate && enhancements.pivotJob) {
+    pivotCandidate = { ...enhancements.pivotJob };
+  }
+  if (pivotCandidate) {
+    pivotCandidate.metric = pivotCandidate.metric || effectiveFallbackMetric;
+    pivotCandidate.agg = 'sum';
+  }
+
+  const reservedLimit = pivotCandidate ? Math.max(0, maxCharts - 1) : maxCharts;
+  const bannedMetrics = new Set(['Code', 'ProjectId', 'RawValue', 'CORP_EC', 'CORP_RE', 'RE', 'EC', 'EC_P', 'Msia', 'Total']);
+
+  const sanitizeMetric = (metric) => {
+    const candidate = metric || effectiveFallbackMetric;
+    if (!candidate) return effectiveFallbackMetric;
+    if (bannedMetrics.has(String(candidate))) return effectiveFallbackMetric;
+    return candidate;
+  };
+
+  const normalizeJob = (job) => {
+    const normalized = { ...job };
+    if (normalized.type === 'pivot') {
+      normalized.metric = sanitizeMetric(normalized.metric);
+      normalized.agg = 'sum';
+      return normalized;
+    }
+    normalized.metric = sanitizeMetric(normalized.metric);
+    normalized.agg = 'sum';
+    return normalized;
+  };
+
+  const jobsOrdered = [];
+  const seenKeys = new Set();
+  const appendJob = (job, respectReserved = true) => {
+    if (!job) return;
+    const normalized = normalizeJob(job);
+    const limit = respectReserved ? reservedLimit : maxCharts;
+    if (respectReserved && jobsOrdered.length >= limit) return;
+    const key = canonicalJobKey(normalized);
+    if (seenKeys.has(key)) return;
+    if (!respectReserved && jobsOrdered.length >= limit) return;
+    jobsOrdered.push(normalized);
+    seenKeys.add(key);
+  };
+
+  baseJobs.filter(job => job && job.type !== 'pivot').forEach(job => appendJob(job, true));
+  (enhancements.topKJobs || []).slice(0, 5).forEach(job => {
+    const sanitized = { ...job, metric: job.metric || effectiveFallbackMetric, agg: 'sum' };
+    appendJob(sanitized, true);
+  });
+  (enhancements.supplementalJobs || []).forEach(job => {
+    const sanitized = { ...job, metric: job.metric || effectiveFallbackMetric, agg: 'sum' };
+    appendJob(sanitized, true);
+  });
+  if (pivotCandidate) {
+    appendJob(pivotCandidate, false);
+  }
+
+  const ensurePivotPresence = (list, pivot, limit) => {
+    if (!pivot) return list;
+    const hasPivot = list.some(job => job && job.type === 'pivot');
+    if (hasPivot) return list;
+    const pivotKey = canonicalJobKey(pivot);
+    const alreadyQueued = list.some(job => canonicalJobKey(job) === pivotKey);
+    if (alreadyQueued) return list;
+    const next = [...list];
+    if (next.length >= limit) {
+      const removalIdx = next.slice().reverse().findIndex(job => job && job.type !== 'pivot');
+      if (removalIdx >= 0) {
+        next.splice(next.length - 1 - removalIdx, 1);
+      } else {
+        next.pop();
+      }
+    }
+    if (next.length < limit) next.push(pivot);
+    return next;
+  };
+
+  let jobs = ensurePivotPresence(jobsOrdered, pivotCandidate, maxCharts);
+
+  const metricNameForCurrency = effectiveFallbackMetric;
 
   const currencyCandidate = profileCols.find(col => col && col.hint === 'currencyToken' && Number(col.unique ?? 0) > 1 && Number(col.completeness ?? 0) >= 0.3);
   if (currencyCandidate && metricNameForCurrency) {
@@ -361,7 +457,26 @@ export function buildLocalAgentPlan(context) {
         category: 'currency',
         priority: 'low'
       };
-      jobs = deduplicateJobs([currencyJob, ...jobs]).slice(0, maxCharts);
+      const pivotJob = jobs.find(job => job && job.type === 'pivot');
+      const reservedForCurrency = pivotJob ? Math.max(0, maxCharts - 1) : maxCharts;
+      const nextJobs = [];
+      const seen = new Set();
+      const appendCurrencyJob = (job, respectReserved = true) => {
+        if (!job) return;
+        const normalized = normalizeJob(job);
+        const limit = respectReserved ? reservedForCurrency : maxCharts;
+        if (respectReserved && nextJobs.length >= limit) return;
+        const key = canonicalJobKey(normalized);
+        if (seen.has(key)) return;
+        if (!respectReserved && nextJobs.length >= limit) return;
+        nextJobs.push(normalized);
+        seen.add(key);
+      };
+
+      appendCurrencyJob(currencyJob, true);
+      jobs.filter(job => job && job.type !== 'pivot').forEach(job => appendCurrencyJob(job, true));
+      if (pivotJob) appendCurrencyJob(pivotJob, false);
+      jobs = ensurePivotPresence(nextJobs, pivotJob, maxCharts);
     }
   }
 
@@ -1326,40 +1441,40 @@ async function buildAggCard(job, cardState = {}, sessionId = null, options = {})
 }
 
 async function getAiAnalysisPlan(context) {
-    const columns = context.profile.columns.map(c => c.name);
+    const profileCols = Array.isArray(context.profile?.columns) ? context.profile.columns : [];
+    const columns = profileCols.map(c => c.name);
     const erpPriority = getErpAnalysisPriority(columns);
+    const erpSeedJobs = [];
+    let planType = 'auto-analysis';
 
     if (erpPriority && erpPriority.metrics.length > 0 && erpPriority.dimensions.length > 0) {
+        planType = 'erp-analysis';
         console.log('[Debug] getAiAnalysisPlan: ERP priority plan detected:', JSON.stringify(erpPriority, null, 2));
-        const jobs = [];
         const primaryMetric = erpPriority.metrics[0];
         console.log('[Debug] getAiAnalysisPlan: Primary metric selected:', JSON.stringify(primaryMetric, null, 2));
-        
-        // Create jobs based on the prioritized dimensions
+        const metricName = primaryMetric?.type === 'derived'
+            ? (primaryMetric.baseMetric || primaryMetric.name)
+            : primaryMetric?.name;
         erpPriority.dimensions.forEach(dim => {
-            if (dim && columns.includes(dim)) {
-                jobs.push({
+            if (dim && columns.includes(dim) && metricName) {
+                erpSeedJobs.push({
                     groupBy: dim,
-                    metric: primaryMetric.type === 'derived' ? primaryMetric.baseMetric : primaryMetric.name,
-                    agg: 'sum' // Default to sum for ERP metrics
+                    metric: metricName,
+                    agg: 'sum'
                 });
             }
         });
-
-        return {
-            tasks: [{
-                description: 'Run ERP-specific analysis based on metric priorities',
-                type: 'erp-analysis'
-            }],
-            jobs: jobs,
-            planType: 'erp-analysis'
-        };
+    } else {
+        console.log('No specific ERP plan matched. Using generic fallback.');
     }
 
-    // Fallback to a generic plan if no ERP pattern is matched.
-    console.log('No specific ERP plan matched. Using generic fallback.');
     const plan0 = autoPlan(context.profile, context.includedRows, context.excludedDimensions);
-    let jobs = (plan0 && Array.isArray(plan0.jobs)) ? plan0.jobs : [];
+    let jobs = (plan0 && Array.isArray(plan0.jobs)) ? plan0.jobs.slice() : [];
+    if (erpSeedJobs.length) {
+        jobs = [...erpSeedJobs, ...jobs];
+    }
+    jobs = deduplicateJobs(jobs);
+    const maxJobs = 12;
 
     // Defensive fallback for cross-tab → long pipeline:
     // If autoPlan produced 0 jobs but we have converted long rows (AGG_ROWS),
@@ -1396,13 +1511,14 @@ async function getAiAnalysisPlan(context) {
     }
 
     // Prefer Value as metric in long schema; demote Code/ProjectId/RawValue as metrics
+    const bannedMetrics = new Set(['Code','ProjectId','RawValue','CORP_EC','CORP_RE','RE','EC','EC_P','Msia','Total']);
+
     if (hasValue && Array.isArray(jobs) && jobs.length > 0) {
-        const bannedMetrics = new Set(['Code','ProjectId','RawValue','CORP_EC','CORP_RE','RE','EC','EC_P','Msia','Total']);
         jobs = jobs.map(j => {
             const metric = (!j.metric || bannedMetrics.has(String(j.metric))) ? 'Value' : j.metric;
             return { ...j, metric, agg: j.agg || 'sum' };
         });
-        jobs = deduplicateJobs(jobs).slice(0, 10);
+        jobs = deduplicateJobs(jobs);
     }
 
     // Final guard: still empty → pick best-guess numeric metric and first dimension
@@ -1416,31 +1532,135 @@ async function getAiAnalysisPlan(context) {
         if (g && m) jobs = [{ groupBy: g, metric: m, agg: 'sum' }];
     }
 
+    let enhancements = { topKJobs: [], supplementalJobs: [], pivotJob: null, meta: {} };
     try {
-        const rowsSource = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
+        const rowsSourceActive = (Array.isArray(window.AGG_ROWS) && window.AGG_ROWS.length)
           ? window.AGG_ROWS
           : (Array.isArray(context.includedRows) ? context.includedRows : []);
-        const enhancements = buildLongFormatEnhancements(context.profile, rowsSource, {
+        enhancements = buildLongFormatEnhancements(context.profile, rowsSourceActive, {
             metricKey: hasValue ? 'Value' : 'Amount',
-            rowEstimate: context.profile?.rowCount || rowsSource.length || (context.includedRows ? context.includedRows.length : 0)
-        });
-        if (enhancements.topKJobs.length) {
-            jobs = deduplicateJobs([...(jobs || []), ...enhancements.topKJobs]).slice(0, 12);
-        }
-        if (enhancements.pivotJob) {
-            jobs = deduplicateJobs([...(jobs || []), enhancements.pivotJob]).slice(0, 12);
-        }
+            rowEstimate: context.profile?.rowCount || rowsSourceActive.length || (context.includedRows ? context.includedRows.length : 0)
+        }) || enhancements;
     } catch (e) {
         console.warn('Long-format enhancement planning failed:', e);
     }
 
+    const basePivot = jobs.find(job => job && job.type === 'pivot');
+    const fallbackMetricCandidate = enhancements.meta?.metricName
+        || basePivot?.metric
+        || (jobs.find(job => job && job.metric)?.metric)
+        || (hasValue ? 'Value' : null)
+        || preferFinancialMetric(columns)
+        || (profileCols.find(col => col.type === 'number')?.name)
+        || 'Value';
+
+    const columnNameSet = new Set(columns);
+    const numericCandidates = profileCols.filter(col => col.type === 'number').map(col => col.name);
+    let effectiveFallbackMetric = fallbackMetricCandidate;
+    if (!columnNameSet.has(effectiveFallbackMetric) && numericCandidates.length) {
+        effectiveFallbackMetric = numericCandidates[0];
+    }
+    if (!columnNameSet.has(effectiveFallbackMetric) && columnNameSet.has('Value')) {
+        effectiveFallbackMetric = 'Value';
+    }
+    if (!columnNameSet.has(effectiveFallbackMetric)) {
+        const [firstAvailable] = columnNameSet;
+        effectiveFallbackMetric = firstAvailable || fallbackMetricCandidate;
+    }
+    if (!effectiveFallbackMetric) {
+        effectiveFallbackMetric = 'Value';
+    }
+
+    let pivotCandidate = basePivot ? { ...basePivot } : null;
+    if (!pivotCandidate && enhancements.pivotJob) {
+        pivotCandidate = { ...enhancements.pivotJob };
+    }
+    if (pivotCandidate) {
+        pivotCandidate.metric = pivotCandidate.metric || effectiveFallbackMetric;
+        pivotCandidate.agg = 'sum';
+    }
+
+    const reservedLimit = pivotCandidate ? Math.max(0, maxJobs - 1) : maxJobs;
+
+    const sanitizeMetric = (metric) => {
+        const candidate = metric || effectiveFallbackMetric;
+        if (!candidate) return effectiveFallbackMetric;
+        if (bannedMetrics.has(String(candidate))) return effectiveFallbackMetric;
+        return candidate;
+    };
+
+    const normalizeJob = (job) => {
+        const normalized = { ...job };
+        if (normalized.type === 'pivot') {
+            normalized.metric = sanitizeMetric(normalized.metric);
+            normalized.agg = 'sum';
+            return normalized;
+        }
+        normalized.metric = sanitizeMetric(normalized.metric);
+        normalized.agg = 'sum';
+        return normalized;
+    };
+
+    const jobsOrdered = [];
+    const seenKeys = new Set();
+    const appendJob = (job, respectReserved = true) => {
+        if (!job) return;
+        const normalized = normalizeJob(job);
+        const limit = respectReserved ? reservedLimit : maxJobs;
+        if (respectReserved && jobsOrdered.length >= limit) return;
+        const key = canonicalJobKey(normalized);
+        if (seenKeys.has(key)) return;
+        if (!respectReserved && jobsOrdered.length >= limit) return;
+        jobsOrdered.push(normalized);
+        seenKeys.add(key);
+    };
+
+    (jobs || []).filter(job => job && job.type !== 'pivot').forEach(job => appendJob(job, true));
+    (enhancements.topKJobs || []).slice(0, 5).forEach(job => {
+        const sanitized = { ...job, metric: job.metric || effectiveFallbackMetric, agg: 'sum' };
+        appendJob(sanitized, true);
+    });
+    (enhancements.supplementalJobs || []).forEach(job => {
+        const sanitized = { ...job, metric: job.metric || effectiveFallbackMetric, agg: 'sum' };
+        appendJob(sanitized, true);
+    });
+    if (pivotCandidate) {
+        appendJob(pivotCandidate, false);
+    }
+
+    const ensurePivotPresence = (list, pivot, limit) => {
+        if (!pivot) return list;
+        const hasPivot = list.some(job => job && job.type === 'pivot');
+        if (hasPivot) return list;
+        const pivotKey = canonicalJobKey(pivot);
+        const alreadyQueued = list.some(job => canonicalJobKey(job) === pivotKey);
+        if (alreadyQueued) return list;
+        const next = [...list];
+        if (next.length >= limit) {
+            const removalIdx = next.slice().reverse().findIndex(job => job && job.type !== 'pivot');
+            if (removalIdx >= 0) {
+                next.splice(next.length - 1 - removalIdx, 1);
+            } else {
+                next.pop();
+            }
+        }
+        if (next.length < limit) next.push(pivot);
+        return next;
+    };
+
+    jobs = ensurePivotPresence(jobsOrdered, pivotCandidate, maxJobs);
+
+    const taskDescription = planType === 'erp-analysis'
+        ? 'Run ERP-specific analysis based on metric priorities'
+        : 'Run standard automatic analysis';
+
     return {
         tasks: [{
-            description: 'Run standard automatic analysis',
-            type: 'auto-analysis'
+            description: taskDescription,
+            type: planType
         }],
         jobs,
-        planType: 'auto-analysis'
+        planType
     };
 }
 
